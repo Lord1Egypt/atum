@@ -375,6 +375,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Strategy Library
 
-`strategy-library/` holds a curated collection of open-source strategies, expert advisors, and indicators gathered from public GitHub repositories — 1,191 files under permissive licenses, deduplicated and organized by runtime.
+`strategy-library/` holds a curated collection of open-source strategies, expert advisors, and indicators gathered from public GitHub repositories — 4,405 files from 433 repositories, under permissive licenses, deduplicated and organized by runtime.
 
 See [strategy-library/README.md](strategy-library/README.md) for the layout and [strategy-library/ATTRIBUTIONS.md](strategy-library/ATTRIBUTIONS.md) for per-repo licensing.

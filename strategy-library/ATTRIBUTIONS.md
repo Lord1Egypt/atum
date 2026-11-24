@@ -5,12 +5,12 @@ license. This file records the source and license for each one. If you redistrib
 this library or any part of it, keep this file and the copyright notices inside the
 source files intact.
 
-**4534 files from 433 repositories.**
+**4405 files from 433 repositories.**
 
 | Repository | License | Stars | Files |
 |---|---|---|---|
-| [pmorissette/bt](https://github.com/pmorissette/bt) | mit | 3045 | 9 |
-| [mars-tw/anti-gambling-trader-tw](https://github.com/mars-tw/anti-gambling-trader-tw) | mit | 1186 | 5 |
+| [pmorissette/bt](https://github.com/pmorissette/bt) | mit | 3045 | 4 |
+| [mars-tw/anti-gambling-trader-tw](https://github.com/mars-tw/anti-gambling-trader-tw) | mit | 1186 | 3 |
 | [QuantJourneyOrg/quantjourney-bt](https://github.com/QuantJourneyOrg/quantjourney-bt) | apache-2.0 | 713 | 4 |
 | [geraked/metatrader5](https://github.com/geraked/metatrader5) | mit | 707 | 12 |
 | [alpacahq/alpaca-backtrader-api](https://github.com/alpacahq/alpaca-backtrader-api) | apache-2.0 | 705 | 10 |
@@ -20,7 +20,7 @@ source files intact.
 | [Skinok/backtrader-pyqt-ui](https://github.com/Skinok/backtrader-pyqt-ui) | mit | 518 | 9 |
 | [xgboosted/pandas-ta-classic](https://github.com/xgboosted/pandas-ta-classic) | mit | 495 | 2 |
 | [magic8bot/magic8bot](https://github.com/magic8bot/magic8bot) | mit | 408 | 1 |
-| [hzy1522/tickflow-stock-panel](https://github.com/hzy1522/tickflow-stock-panel) | mit | 375 | 7 |
+| [hzy1522/tickflow-stock-panel](https://github.com/hzy1522/tickflow-stock-panel) | mit | 375 | 4 |
 | [darwinex/dwx-zeromq-connector](https://github.com/darwinex/dwx-zeromq-connector) | bsd-3-clause | 372 | 1 |
 | [paulcpk/freqtrade-strategies-that-work](https://github.com/paulcpk/freqtrade-strategies-that-work) | mit | 332 | 5 |
 | [elrizwiraswara/nyao_scalper_mt5](https://github.com/elrizwiraswara/nyao_scalper_mt5) | bsd-3-clause | 264 | 2 |
@@ -44,7 +44,7 @@ source files intact.
 | [EarnForex/Account-Protector](https://github.com/EarnForex/Account-Protector) | apache-2.0 | 126 | 2 |
 | [Roffild/RoffildLibrary](https://github.com/Roffild/RoffildLibrary) | apache-2.0 | 120 | 4 |
 | [xxvw/ICT_Library_MQ5](https://github.com/xxvw/ICT_Library_MQ5) | mit | 112 | 2 |
-| [CyberImmortal/clawdrive](https://github.com/CyberImmortal/clawdrive) | apache-2.0 | 108 | 4 |
+| [CyberImmortal/clawdrive](https://github.com/CyberImmortal/clawdrive) | apache-2.0 | 108 | 2 |
 | [geraked/tradingview](https://github.com/geraked/tradingview) | mit | 107 | 9 |
 | [OpenTrading/OTMql4Zmq](https://github.com/OpenTrading/OTMql4Zmq) | mit | 100 | 2 |
 | [KVignesh122/MT5-SMC-trading-bot](https://github.com/KVignesh122/MT5-SMC-trading-bot) | apache-2.0 | 96 | 1 |
@@ -53,9 +53,9 @@ source files intact.
 | [niiisho/TradingView-MT5-Bridge](https://github.com/niiisho/TradingView-MT5-Bridge) | mit | 87 | 1 |
 | [carlosrod723/MQL5-Trading-Bot](https://github.com/carlosrod723/MQL5-Trading-Bot) | mit | 86 | 1 |
 | [sibvic/mq4-templates](https://github.com/sibvic/mq4-templates) | mit | 86 | 3 |
-| [paperswithbacktest/pwb-toolbox](https://github.com/paperswithbacktest/pwb-toolbox) | apache-2.0 | 84 | 23 |
+| [paperswithbacktest/pwb-toolbox](https://github.com/paperswithbacktest/pwb-toolbox) | apache-2.0 | 84 | 13 |
 | [MT5-Automation-Labs/mt5-gold-scalper-ea](https://github.com/MT5-Automation-Labs/mt5-gold-scalper-ea) | mit | 83 | 4 |
-| [phonegapX/bt-ccxt-store-cn](https://github.com/phonegapX/bt-ccxt-store-cn) | mit | 82 | 11 |
+| [phonegapX/bt-ccxt-store-cn](https://github.com/phonegapX/bt-ccxt-store-cn) | mit | 82 | 10 |
 | [sagarrathi/AlgoTrading](https://github.com/sagarrathi/AlgoTrading) | mit | 79 | 3 |
 | [yanstd888/institutional-smc-scalper-mt5](https://github.com/yanstd888/institutional-smc-scalper-mt5) | mit | 79 | 2 |
 | [WISEPLAT/backtrader_moexalgo](https://github.com/WISEPLAT/backtrader_moexalgo) | mit | 75 | 29 |
@@ -73,7 +73,7 @@ source files intact.
 | [Solano96/AI-Strategies-StockMarket](https://github.com/Solano96/AI-Strategies-StockMarket) | mit | 54 | 14 |
 | [yankikucuk/pine-script-syntax-highlighter](https://github.com/yankikucuk/pine-script-syntax-highlighter) | mit | 54 | 4 |
 | [diliproshitha/neo-trader](https://github.com/diliproshitha/neo-trader) | apache-2.0 | 52 | 2 |
-| [faryhuo/backtrader](https://github.com/faryhuo/backtrader) | mit | 52 | 69 |
+| [faryhuo/backtrader](https://github.com/faryhuo/backtrader) | mit | 52 | 54 |
 | [WallStreetPete/awesome-open-source-trading](https://github.com/WallStreetPete/awesome-open-source-trading) | cc0-1.0 | 51 | 1 |
 | [mihakralj/pinescript](https://github.com/mihakralj/pinescript) | mit | 51 | 410 |
 | [LimexAILab/QuantCode-Bench](https://github.com/LimexAILab/QuantCode-Bench) | mit | 48 | 4 |
@@ -84,16 +84,16 @@ source files intact.
 | [BAKOME-Hub/BAKOMEGoldScalper](https://github.com/BAKOME-Hub/BAKOMEGoldScalper) | mit | 43 | 1 |
 | [fabioo29/telegram-trading-bot](https://github.com/fabioo29/telegram-trading-bot) | mit | 42 | 1 |
 | [345-strategies/thestrat-suite](https://github.com/345-strategies/thestrat-suite) | mpl-2.0 | 39 | 31 |
-| [revanthpobala/pinescript-vscode-extension](https://github.com/revanthpobala/pinescript-vscode-extension) | mit | 39 | 3 |
+| [revanthpobala/pinescript-vscode-extension](https://github.com/revanthpobala/pinescript-vscode-extension) | mpl-2.0 | 39 | 2 |
 | [nuric/mt4-tcp](https://github.com/nuric/mt4-tcp) | mit | 38 | 3 |
 | [Opus-Aether-AI/pine-transpiler](https://github.com/Opus-Aether-AI/pine-transpiler) | mit | 37 | 238 |
 | [Allencake/coil-reclaim-indicator](https://github.com/Allencake/coil-reclaim-indicator) | mit | 36 | 1 |
 | [ersingencturk/FreeExpertAdvisor](https://github.com/ersingencturk/FreeExpertAdvisor) | bsd-3-clause | 36 | 1 |
 | [TradingSignalBot/tradingview-strategies](https://github.com/TradingSignalBot/tradingview-strategies) | mit | 35 | 9 |
 | [deepentropy/opentrader](https://github.com/deepentropy/opentrader) | mit | 35 | 1 |
-| [portfolioplus/pystockfilter](https://github.com/portfolioplus/pystockfilter) | mit | 35 | 8 |
+| [portfolioplus/pystockfilter](https://github.com/portfolioplus/pystockfilter) | mit | 35 | 3 |
 | [EarnForex/Chart-Pattern-Helper](https://github.com/EarnForex/Chart-Pattern-Helper) | apache-2.0 | 34 | 2 |
-| [raphant/freqtrade-strategies](https://github.com/raphant/freqtrade-strategies) | mit | 34 | 5 |
+| [raphant/freqtrade-strategies](https://github.com/raphant/freqtrade-strategies) | mit | 34 | 4 |
 | [tradesdontlie/pine-script-v6-extension](https://github.com/tradesdontlie/pine-script-v6-extension) | mit | 34 | 5 |
 | [Matswm86/tradingview-indicators](https://github.com/Matswm86/tradingview-indicators) | mit | 33 | 6 |
 | [hiPirate/TradingView](https://github.com/hiPirate/TradingView) | unlicense | 33 | 5 |
@@ -136,7 +136,7 @@ source files intact.
 | [EarnForex/ATR-Trailing-Stop](https://github.com/EarnForex/ATR-Trailing-Stop) | apache-2.0 | 20 | 2 |
 | [Musyimi97/phase404](https://github.com/Musyimi97/phase404) | mit | 19 | 4 |
 | [PavelML-Dev/ML-Trading-Systems](https://github.com/PavelML-Dev/ML-Trading-Systems) | mit | 19 | 1 |
-| [mohdhd/strat-hunter](https://github.com/mohdhd/strat-hunter) | mit | 19 | 5 |
+| [mohdhd/strat-hunter](https://github.com/mohdhd/strat-hunter) | mit | 19 | 3 |
 | [samuelharting/bandz-indicators](https://github.com/samuelharting/bandz-indicators) | mpl-2.0 | 19 | 9 |
 | [tickelton/mql4](https://github.com/tickelton/mql4) | mit | 19 | 10 |
 | [EarnForex/Heiken-Ashi-Naive](https://github.com/EarnForex/Heiken-Ashi-Naive) | apache-2.0 | 18 | 4 |
@@ -195,7 +195,7 @@ source files intact.
 | [fathiaomar/bot](https://github.com/fathiaomar/bot) | mit | 8 | 1 |
 | [foeed/GridScalperEA](https://github.com/foeed/GridScalperEA) | mit | 8 | 7 |
 | [ingpawat/freqtrade-strategy-with-backtest](https://github.com/ingpawat/freqtrade-strategy-with-backtest) | mit | 8 | 2 |
-| [CoreyLeath-code/Algo-Quant-Backtester-](https://github.com/CoreyLeath-code/Algo-Quant-Backtester-) | mit | 7 | 4 |
+| [CoreyLeath-code/Algo-Quant-Backtester-](https://github.com/CoreyLeath-code/Algo-Quant-Backtester-) | mit | 7 | 3 |
 | [JackZhao516/Smrti-tradingview-pine-scripts](https://github.com/JackZhao516/Smrti-tradingview-pine-scripts) | mpl-2.0 | 7 | 13 |
 | [peterdmv/tradingview](https://github.com/peterdmv/tradingview) | mpl-2.0 | 7 | 6 |
 | [wickra-lib/wickra-backtest](https://github.com/wickra-lib/wickra-backtest) | apache-2.0 | 7 | 1 |
@@ -209,7 +209,7 @@ source files intact.
 | [mickpletcher/AlpacaTrading](https://github.com/mickpletcher/AlpacaTrading) | mit | 6 | 2 |
 | [pepshirley/mt4-prop-firm-manager](https://github.com/pepshirley/mt4-prop-firm-manager) | mit | 6 | 1 |
 | [sajidmahamud835/MarketSync-EA](https://github.com/sajidmahamud835/MarketSync-EA) | mit | 6 | 1 |
-| [trsdn/meta-strategy](https://github.com/trsdn/meta-strategy) | mit | 6 | 14 |
+| [trsdn/meta-strategy](https://github.com/trsdn/meta-strategy) | mit | 6 | 13 |
 | [wisarmy/exbot](https://github.com/wisarmy/exbot) | mit | 6 | 4 |
 | [493843643/ai_stock_analysis](https://github.com/493843643/ai_stock_analysis) | mit | 5 | 1 |
 | [Cryptotrademate/cryptotrademate-backtesting-tool](https://github.com/Cryptotrademate/cryptotrademate-backtesting-tool) | mit | 5 | 2 |
@@ -221,7 +221,7 @@ source files intact.
 | [tanishq-rocks/tradekit](https://github.com/tanishq-rocks/tradekit) | mpl-2.0 | 5 | 4 |
 | [xsodus/tradingview-strategies](https://github.com/xsodus/tradingview-strategies) | mit | 5 | 4 |
 | [EarnForex/Single-Breakeven](https://github.com/EarnForex/Single-Breakeven) | apache-2.0 | 4 | 2 |
-| [Kuzi-DEV/Tokio-ai](https://github.com/Kuzi-DEV/Tokio-ai) | mit | 4 | 4 |
+| [Kuzi-DEV/Tokio-ai](https://github.com/Kuzi-DEV/Tokio-ai) | mit | 4 | 3 |
 | [MunchonGithub/thragg-ea](https://github.com/MunchonGithub/thragg-ea) | apache-2.0 | 4 | 1 |
 | [Narymunt/MQL5](https://github.com/Narymunt/MQL5) | bsd-3-clause | 4 | 4 |
 | [RightShiner/tradingview-pinescript-indicators](https://github.com/RightShiner/tradingview-pinescript-indicators) | mit | 4 | 95 |
@@ -235,11 +235,11 @@ source files intact.
 | [trugurpala/pinescriptv6](https://github.com/trugurpala/pinescriptv6) | mit | 4 | 56 |
 | [walidkssa/pine-script-v6-examples](https://github.com/walidkssa/pine-script-v6-examples) | mit | 4 | 20 |
 | [0xbarss/mt5-bridge](https://github.com/0xbarss/mt5-bridge) | mit | 3 | 1 |
-| [10-academy-w-9/crypto-trading-backtesting](https://github.com/10-academy-w-9/crypto-trading-backtesting) | mit | 3 | 5 |
+| [10-academy-w-9/crypto-trading-backtesting](https://github.com/10-academy-w-9/crypto-trading-backtesting) | mit | 3 | 4 |
 | [AkashSasikumar47/pine-strategy-indicators-v5](https://github.com/AkashSasikumar47/pine-strategy-indicators-v5) | mit | 3 | 5 |
 | [AlgoXpertLab/NEXUS](https://github.com/AlgoXpertLab/NEXUS) | apache-2.0 | 3 | 1 |
 | [EHubert/PythonBacktesting](https://github.com/EHubert/PythonBacktesting) | mit | 3 | 3 |
-| [MoDarK-MK/PineScript-Skill](https://github.com/MoDarK-MK/PineScript-Skill) | mpl-2.0 | 3 | 24 |
+| [MoDarK-MK/PineScript-Skill](https://github.com/MoDarK-MK/PineScript-Skill) | mpl-2.0 | 3 | 23 |
 | [Pauloeduspbr/EA-SMC-Engine](https://github.com/Pauloeduspbr/EA-SMC-Engine) | mit | 3 | 1 |
 | [Pusparaj99op/GeoMath_MT5_EA](https://github.com/Pusparaj99op/GeoMath_MT5_EA) | mit | 3 | 1 |
 | [RA1NCS/TradeEase](https://github.com/RA1NCS/TradeEase) | mit | 3 | 1 |
@@ -257,7 +257,7 @@ source files intact.
 | [santiquiroz/leviathan](https://github.com/santiquiroz/leviathan) | mit | 3 | 1 |
 | [st-mich43l/apexvoid-trading-bot](https://github.com/st-mich43l/apexvoid-trading-bot) | mit | 3 | 1 |
 | [stella-entry/stella-pine-starter-kit](https://github.com/stella-entry/stella-pine-starter-kit) | mit | 3 | 12 |
-| [toolazytoname/Sentinel](https://github.com/toolazytoname/Sentinel) | mit | 3 | 8 |
+| [toolazytoname/Sentinel](https://github.com/toolazytoname/Sentinel) | mit | 3 | 6 |
 | [BAKOME-Hub/BakomeTrinityEA](https://github.com/BAKOME-Hub/BakomeTrinityEA) | mit | 2 | 1 |
 | [Bederf/leah-freqtrade-strategies](https://github.com/Bederf/leah-freqtrade-strategies) | mit | 2 | 4 |
 | [Fintor-AI/WealthPole-Architecture-Demo](https://github.com/Fintor-AI/WealthPole-Architecture-Demo) | mit | 2 | 1 |
@@ -267,8 +267,8 @@ source files intact.
 | [NinjaEde/tradingview-pine-scripts](https://github.com/NinjaEde/tradingview-pine-scripts) | mit | 2 | 9 |
 | [Paulito123/bs4zr](https://github.com/Paulito123/bs4zr) | mit | 2 | 4 |
 | [Prat617/strategic](https://github.com/Prat617/strategic) | mit | 2 | 7 |
-| [Toomi16011601/tradeoff](https://github.com/Toomi16011601/tradeoff) | mit | 2 | 10 |
-| [ZSQBFan/Quant_Project](https://github.com/ZSQBFan/Quant_Project) | mit | 2 | 18 |
+| [Toomi16011601/tradeoff](https://github.com/Toomi16011601/tradeoff) | mit | 2 | 7 |
+| [ZSQBFan/Quant_Project](https://github.com/ZSQBFan/Quant_Project) | mit | 2 | 5 |
 | [abweb3/Freqtrade-Strategies](https://github.com/abweb3/Freqtrade-Strategies) | mit | 2 | 1 |
 | [aleks-drozy/fyp-trading-strategy](https://github.com/aleks-drozy/fyp-trading-strategy) | mit | 2 | 1 |
 | [aplicy-com/guarded-trader](https://github.com/aplicy-com/guarded-trader) | apache-2.0 | 2 | 5 |
@@ -288,7 +288,7 @@ source files intact.
 | [kat3samsin/TradingStrategies](https://github.com/kat3samsin/TradingStrategies) | mpl-2.0 | 2 | 6 |
 | [klevler/tradingview_indicators](https://github.com/klevler/tradingview_indicators) | mpl-2.0 | 2 | 8 |
 | [kohld/tradingview-scripts](https://github.com/kohld/tradingview-scripts) | mit | 2 | 2 |
-| [koval-finance/koval-engine](https://github.com/koval-finance/koval-engine) | mit | 2 | 17 |
+| [koval-finance/koval-engine](https://github.com/koval-finance/koval-engine) | mit | 2 | 1 |
 | [kristenmo20/freqtrade-strategies](https://github.com/kristenmo20/freqtrade-strategies) | mpl-2.0 | 2 | 13 |
 | [lit26/AlgoAnalyzer](https://github.com/lit26/AlgoAnalyzer) | mit | 2 | 4 |
 | [moonyroy/trust-me-bro-strategy](https://github.com/moonyroy/trust-me-bro-strategy) | mit | 2 | 1 |
@@ -305,7 +305,7 @@ source files intact.
 | [realanthonyc/QQE-AK-EFI](https://github.com/realanthonyc/QQE-AK-EFI) | mpl-2.0 | 2 | 5 |
 | [realanthonyc/VWAP-Price-Channel-Enhanced](https://github.com/realanthonyc/VWAP-Price-Channel-Enhanced) | mpl-2.0 | 2 | 1 |
 | [ryangaraygay/tradingview-indicators](https://github.com/ryangaraygay/tradingview-indicators) | mit | 2 | 17 |
-| [sebastianspicker/schrodingers-quant](https://github.com/sebastianspicker/schrodingers-quant) | mit | 2 | 7 |
+| [sebastianspicker/schrodingers-quant](https://github.com/sebastianspicker/schrodingers-quant) | mit | 2 | 4 |
 | [shamshyder123-oss/gold-trading-ea](https://github.com/shamshyder123-oss/gold-trading-ea) | mit | 2 | 1 |
 | [zmcx16/Norn-Finance-Backtesting](https://github.com/zmcx16/Norn-Finance-Backtesting) | mit | 2 | 7 |
 | [DamianAcri/mt5-algorithmic-trading-research](https://github.com/DamianAcri/mt5-algorithmic-trading-research) | mit | 1 | 4 |
@@ -323,9 +323,9 @@ source files intact.
 | [awran5/mql-trading-tools](https://github.com/awran5/mql-trading-tools) | mit | 1 | 1 |
 | [bader61888/ehtiraf-tasi](https://github.com/bader61888/ehtiraf-tasi) | mit | 1 | 4 |
 | [castletrade/pine-script-smc-indicators](https://github.com/castletrade/pine-script-smc-indicators) | mpl-2.0 | 1 | 3 |
-| [cloudQuant/backtrader-mcp](https://github.com/cloudQuant/backtrader-mcp) | mit | 1 | 36 |
-| [cloudQuant/backtrader-skills](https://github.com/cloudQuant/backtrader-skills) | mit | 1 | 33 |
-| [darquantlabs/backtrader-strategy-validator](https://github.com/darquantlabs/backtrader-strategy-validator) | mit | 1 | 6 |
+| [cloudQuant/backtrader-mcp](https://github.com/cloudQuant/backtrader-mcp) | mit | 1 | 17 |
+| [cloudQuant/backtrader-skills](https://github.com/cloudQuant/backtrader-skills) | mit | 1 | 20 |
+| [darquantlabs/backtrader-strategy-validator](https://github.com/darquantlabs/backtrader-strategy-validator) | mit | 1 | 1 |
 | [darup67/flux-lab](https://github.com/darup67/flux-lab) | mit | 1 | 1 |
 | [dieumerci8/freqtrade-strategy-builder](https://github.com/dieumerci8/freqtrade-strategy-builder) | mit | 1 | 1 |
 | [domsendotnet/MT5-Goldesel](https://github.com/domsendotnet/MT5-Goldesel) | mit | 1 | 1 |
@@ -366,7 +366,7 @@ source files intact.
 | [MrHernandez9/codepips-tools](https://github.com/MrHernandez9/codepips-tools) | mit | 0 | 1 |
 | [Nico0100-algo/MQL5-samples](https://github.com/Nico0100-algo/MQL5-samples) | mit | 0 | 1 |
 | [PropBotStudio/prop-firm-guard](https://github.com/PropBotStudio/prop-firm-guard) | mit | 0 | 2 |
-| [Reaver1000/futures-backtest-suite](https://github.com/Reaver1000/futures-backtest-suite) | mit | 0 | 10 |
+| [Reaver1000/futures-backtest-suite](https://github.com/Reaver1000/futures-backtest-suite) | mit | 0 | 9 |
 | [ShashankCodeX/LW-Kill-Zones](https://github.com/ShashankCodeX/LW-Kill-Zones) | mit | 0 | 1 |
 | [ShoCodeNode/mql5](https://github.com/ShoCodeNode/mql5) | mit | 0 | 1 |
 | [SomeSuperCoder/PineFramework](https://github.com/SomeSuperCoder/PineFramework) | mit | 0 | 20 |
@@ -399,7 +399,7 @@ source files intact.
 | [fdemir16/ICT-Gold-Pro](https://github.com/fdemir16/ICT-Gold-Pro) | mit | 0 | 1 |
 | [firyomaefx/TradingSuite](https://github.com/firyomaefx/TradingSuite) | mit | 0 | 1 |
 | [flamingrickpat/kektrade](https://github.com/flamingrickpat/kektrade) | mit | 0 | 10 |
-| [freqtrade-cn/Freqtrade-Strategy-Analyser](https://github.com/freqtrade-cn/Freqtrade-Strategy-Analyser) | mit | 0 | 2 |
+| [freqtrade-cn/Freqtrade-Strategy-Analyser](https://github.com/freqtrade-cn/Freqtrade-Strategy-Analyser) | mit | 0 | 1 |
 | [gexchai/BotPulse](https://github.com/gexchai/BotPulse) | apache-2.0 | 0 | 1 |
 | [gexchai/botcheck-mql5](https://github.com/gexchai/botcheck-mql5) | mit | 0 | 3 |
 | [guyshonshon/gagafx](https://github.com/guyshonshon/gagafx) | mit | 0 | 1 |
@@ -415,7 +415,7 @@ source files intact.
 | [kingabdee-fx/abdeefx-indicator](https://github.com/kingabdee-fx/abdeefx-indicator) | mpl-2.0 | 0 | 1 |
 | [lhellgren/tradingview-scripts](https://github.com/lhellgren/tradingview-scripts) | mit | 0 | 7 |
 | [liyang089827/pinescript-indicators](https://github.com/liyang089827/pinescript-indicators) | mit | 0 | 6 |
-| [lldaryall/Quantitative-Trading-Strategy-Backtester](https://github.com/lldaryall/Quantitative-Trading-Strategy-Backtester) | mit | 0 | 5 |
+| [lldaryall/Quantitative-Trading-Strategy-Backtester](https://github.com/lldaryall/Quantitative-Trading-Strategy-Backtester) | mit | 0 | 4 |
 | [logiccrafterdz/Strategy004-Gap-Reversion-Pro](https://github.com/logiccrafterdz/Strategy004-Gap-Reversion-Pro) | mit | 0 | 1 |
 | [maha-j/quant-platform](https://github.com/maha-j/quant-platform) | mit | 0 | 1 |
 | [mehdimoradkhan24-netizen/maxtor](https://github.com/mehdimoradkhan24-netizen/maxtor) | mit | 0 | 1 |
@@ -450,9 +450,9 @@ exists, falling back to the repository license otherwise. Where the two differ, 
 file header wins — several Pine Scripts published under MIT repositories carry the
 default MPL-2.0 header from TradingView's publishing template.
 
-- **mit** — 3171 files
-- **mpl-2.0** — 1168 files
-- **apache-2.0** — 167 files
+- **mit** — 3055 files
+- **mpl-2.0** — 1167 files
+- **apache-2.0** — 155 files
 - **bsd-3-clause** — 17 files
 - **unlicense** — 8 files
 - **cc0-1.0** — 3 files
