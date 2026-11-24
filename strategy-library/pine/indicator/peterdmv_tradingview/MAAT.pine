@@ -1,0 +1,376 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © peterdmv
+//
+// Thanks to JohnMuchow for the original version of this indicator.
+//
+// Release: v1
+
+//@version=6
+indicator('Moving Averages For All Timeframes', shorttitle='MAAT', overlay=true)
+
+//***************************************************************************************
+// Inputs
+//***************************************************************************************
+
+//---------------------------------------------------
+// Intraday
+//---------------------------------------------------
+iIntraMA1Visible = input.bool(title='', defval=true, inline='I1', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA1Length = input.int(title='Period', minval=1, maxval=5000, defval=8, inline='I1', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA1Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I1', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA1Source = input.source(title='', defval=close, inline='I1', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA1Color = input.color(title='', defval=color.green, inline='I1', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA1Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I1w', group='Intraday Moving Averages', display=display.data_window)
+
+iIntraMA2Visible = input.bool(title='', defval=true, inline='I2', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA2Length = input.int(title='Period', minval=1, maxval=5000, defval=21, inline='I2', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA2Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I2', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA2Source = input.source(title='', defval=close, inline='I2', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA2Color = input.color(title='', defval=color.purple, inline='I2', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA2Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I2w', group='Intraday Moving Averages', display=display.data_window)
+
+iIntraMA3Visible = input.bool(title='', defval=true, inline='I3', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA3Length = input.int(title='Period', minval=1, maxval=5000, defval=65, inline='I3', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA3Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I3', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA3Source = input.source(title='', defval=close, inline='I3', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA3Color = input.color(title='', defval=color.maroon, inline='I3', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA3Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I3w', group='Intraday Moving Averages', display=display.data_window)
+
+iIntraMA4Visible = input.bool(title='', defval=true, inline='I4', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA4Length = input.int(title='Period', minval=1, maxval=5000, defval=144, inline='I4', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA4Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I4', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA4Source = input.source(title='', defval=close, inline='I4', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA4Color = input.color(title='', defval=color.gray, inline='I4', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA4Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I4w', group='Intraday Moving Averages', display=display.data_window)
+
+iIntraMA5Visible = input.bool(title='', defval=false, inline='I5', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA5Length = input.int(title='Period', minval=1, maxval=5000, defval=377, inline='I5', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA5Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I5', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA5Source = input.source(title='', defval=close, inline='I5', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA5Color = input.color(title='', defval=color.gray, inline='I5', group='Intraday Moving Averages', display=display.data_window)
+iIntraMA5Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I5w', group='Intraday Moving Averages', display=display.data_window)
+
+iIntraCloud = input.bool(title='Show Moving Average Cloud', defval=false, inline='I6', display=display.data_window, tooltip='Fill area between two selected moving averages ' +
+     '(pick which ones below). At a glance, you can see if the slower moving average is above or below the faster moving average.')
+iIntraCloudColorUp = input.color(title='   Up', defval=color.new(color.green, transp=90), inline='I6', display=display.data_window)
+iIntraCloudColorDown = input.color(title='Down', defval=color.new(color.red, transp=90), inline='I6', display=display.data_window)
+iIntraCloudMA1 = input.int(title='Between MA #', defval=1, minval=1, maxval=5, inline='I6b', display=display.data_window)
+iIntraCloudMA2 = input.int(title='and #', defval=2, minval=1, maxval=5, inline='I6b', display=display.data_window)
+
+iIntraVWAPVisible = input.bool(title='', defval=true, inline='I7', group='Intraday Indicators', display=display.data_window)
+iIntraVWAPSource = input.source(title='', defval=hlc3, inline='I7', group='Intraday Indicators', display=display.data_window)
+iIntraVWAPColor = input.color(title='', defval=color.orange, inline='I7', group='Intraday Indicators', display=display.data_window)
+iIntraVWAPWidth = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I7w', group='Intraday Indicators', display=display.data_window)
+
+
+//---------------------------------------------------
+// Daily
+//---------------------------------------------------
+iDailyMA1Visible = input.bool(title='', defval=true, inline='I7', group='Daily Moving Averages', display=display.none)
+iDailyMA1Length = input.int(title='Period', minval=1, maxval=5000, defval=4, inline='I7', group='Daily Moving Averages', display=display.none)
+iDailyMA1Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I7', group='Daily Moving Averages', display=display.none)
+iDailyMA1Source = input.source(title='', defval=close, inline='I7', group='Daily Moving Averages', display=display.none)
+iDailyMA1Color = input.color(title='', defval=color.silver, inline='I7', group='Daily Moving Averages', display=display.none)
+iDailyMA1Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I7w', group='Daily Moving Averages', display=display.none)
+
+iDailyMA2Visible = input.bool(title='', defval=true, inline='I8', group='Daily Moving Averages', display=display.data_window)
+iDailyMA2Length = input.int(title='Period', minval=1, maxval=5000, defval=8, inline='I8', group='Daily Moving Averages', display=display.data_window)
+iDailyMA2Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I8', group='Daily Moving Averages', display=display.data_window)
+iDailyMA2Source = input.source(title='', defval=close, inline='I8', group='Daily Moving Averages', display=display.data_window)
+iDailyMA2Color = input.color(title='', defval=color.green, inline='I8', group='Daily Moving Averages', display=display.data_window)
+iDailyMA2Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I8w', group='Daily Moving Averages', display=display.data_window)
+
+iDailyMA3Visible = input.bool(title='', defval=true, inline='I9', group='Daily Moving Averages', display=display.data_window)
+iDailyMA3Length = input.int(title='Period', minval=1, maxval=5000, defval=21, inline='I9', group='Daily Moving Averages', display=display.data_window)
+iDailyMA3Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I9', group='Daily Moving Averages', display=display.data_window)
+iDailyMA3Source = input.source(title='', defval=close, inline='I9', group='Daily Moving Averages', display=display.data_window)
+iDailyMA3Color = input.color(title='', defval=color.purple, inline='I9', group='Daily Moving Averages', display=display.data_window)
+iDailyMA3Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I9w', group='Daily Moving Averages', display=display.data_window)
+
+iDailyMA4Visible = input.bool(title='', defval=true, inline='I10', group='Daily Moving Averages', display=display.data_window)
+iDailyMA4Length = input.int(title='Period', minval=1, maxval=5000, defval=50, inline='I10', group='Daily Moving Averages', display=display.data_window)
+iDailyMA4Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I10', group='Daily Moving Averages', display=display.data_window)
+iDailyMA4Source = input.source(title='', defval=close, inline='I10', group='Daily Moving Averages', display=display.data_window)
+iDailyMA4Color = input.color(title='', defval=color.red, inline='I10', group='Daily Moving Averages', display=display.data_window)
+iDailyMA4Width = input.int(title='Width', defval=2, minval=1, maxval=4, inline='I10w', group='Daily Moving Averages', display=display.data_window)
+
+iDailyMA5Visible = input.bool(title='', defval=true, inline='I11', group='Daily Moving Averages', display=display.data_window)
+iDailyMA5Length = input.int(title='Period', minval=1, maxval=500, defval=65, inline='I11', group='Daily Moving Averages', display=display.data_window)
+iDailyMA5Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I11', group='Daily Moving Averages', display=display.data_window)
+iDailyMA5Source = input.source(title='', defval=close, inline='I11', group='Daily Moving Averages', display=display.data_window)
+iDailyMA5Color = input.color(title='', defval=color.maroon, inline='I11', group='Daily Moving Averages', display=display.data_window)
+iDailyMA5Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I11w', group='Daily Moving Averages', display=display.data_window)
+
+iDailyMA6Visible = input.bool(title='', defval=true, inline='I12', group='Daily Moving Averages', display=display.data_window)
+iDailyMA6Length = input.int(title='Period', minval=1, maxval=500, defval=200, inline='I12', group='Daily Moving Averages', display=display.data_window)
+iDailyMA6Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I12', group='Daily Moving Averages', display=display.data_window)
+iDailyMA6Source = input.source(title='', defval=close, inline='I12', group='Daily Moving Averages', display=display.data_window)
+iDailyMA6Color = input.color(title='', defval=color.gray, inline='I12', group='Daily Moving Averages', display=display.data_window)
+iDailyMA6Width = input.int(title='Width', defval=2, minval=1, maxval=4, inline='I12w', group='Daily Moving Averages', display=display.data_window)
+
+iDailyMA7Visible = input.bool(title='', defval=false, inline='I13', group='Daily Moving Averages', display=display.data_window)
+iDailyMA7Length = input.int(title='Period', minval=1, maxval=500, defval=377, inline='I13', group='Daily Moving Averages', display=display.data_window)
+iDailyMA7Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='EMA', inline='I13', group='Daily Moving Averages', display=display.data_window)
+iDailyMA7Source = input.source(title='', defval=close, inline='I13', group='Daily Moving Averages', display=display.data_window)
+iDailyMA7Color = input.color(title='', defval=color.gray, inline='I13', group='Daily Moving Averages', display=display.data_window)
+iDailyMA7Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I13w', group='Daily Moving Averages', display=display.data_window)
+
+iDailyCloud = input.bool(title='Show Moving Average Cloud', defval=false, inline='I14', display=display.data_window, tooltip='Fill area between two selected moving averages ' +
+     '(pick which ones below). At a glance, you can see if the slower moving average is above or below the faster moving average.')
+iDailyCloudColorUp = input.color(title='   Up', defval=color.new(color.green, transp=90), inline='I14', display=display.data_window)
+iDailyCloudColorDown = input.color(title='Down', defval=color.new(color.red, transp=90), inline='I14', display=display.data_window)
+iDailyCloudMA1 = input.int(title='Between MA #', defval=1, minval=1, maxval=7, inline='I14b', display=display.data_window)
+iDailyCloudMA2 = input.int(title='and #', defval=2, minval=1, maxval=7, inline='I14b', display=display.data_window)
+
+iWeeklyOnDaily = input.bool(title='Show Weekly on Daily', defval=false, inline='WeeklyOnDaily', display=display.data_window)
+iWeeklyOnDailyLength = input.int(title='Period', minval=1, maxval=5000, defval=10, inline='WeeklyOnDaily', display=display.data_window)
+iWeeklyOnDailyType = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='WeeklyOnDaily', display=display.data_window)
+iWeeklyOnDailyColor = input.color(title='', defval=color.olive, inline='WeeklyOnDaily', display=display.data_window)
+iWeeklyOnDailyWidth = input.int(title='Width', defval=1, minval=1, maxval=4, inline='WeeklyOnDailyw', display=display.data_window)
+
+
+//---------------------------------------------------
+// Weekly
+//---------------------------------------------------
+iWeeklyMA1Visible = input.bool(title='', defval=true, inline='I14', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA1Length = input.int(title='Period', minval=1, maxval=5000, defval=10, inline='I14', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA1Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I14', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA1Source = input.source(title='', defval=close, inline='I14', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA1Color = input.color(title='', defval=color.lime, inline='I14', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA1Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I14w', group='Weekly Moving Averages', display=display.data_window)
+
+iWeeklyMA2Visible = input.bool(title='', defval=true, inline='I15', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA2Length = input.int(title='Period', minval=1, maxval=5000, defval=30, inline='I15', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA2Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I15', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA2Source = input.source(title='', defval=close, inline='I15', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA2Color = input.color(title='', defval=color.purple, inline='I15', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA2Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I15w', group='Weekly Moving Averages', display=display.data_window)
+
+iWeeklyMA3Visible = input.bool(title='', defval=true, inline='I16', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA3Length = input.int(title='Period', minval=1, maxval=5000, defval=50, inline='I16', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA3Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I16', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA3Source = input.source(title='', defval=close, inline='I16', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA3Color = input.color(title='', defval=color.red, inline='I16', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA3Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I16w', group='Weekly Moving Averages', display=display.data_window)
+
+iWeeklyMA4Visible = input.bool(title='', defval=false, inline='I17', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA4Length = input.int(title='Period', minval=1, maxval=5000, defval=100, inline='I17', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA4Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I17', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA4Source = input.source(title='', defval=close, inline='I17', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA4Color = input.color(title='', defval=color.gray, inline='I17', group='Weekly Moving Averages', display=display.data_window)
+iWeeklyMA4Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I17w', group='Weekly Moving Averages', display=display.data_window)
+
+iWeeklyCloud = input.bool(title='Show Moving Average Cloud', defval=false, inline='I18', display=display.data_window, tooltip='Fill area between two selected moving averages ' +
+     '(pick which ones below). At a glance, you can see if the slower moving average is above or below the faster moving average.')
+iWeeklyCloudColorUp = input.color(title='   Up', defval=color.new(color.green, transp=90), inline='I18', display=display.data_window)
+iWeeklyCloudColorDown = input.color(title='Down', defval=color.new(color.red, transp=90), inline='I18', display=display.data_window)
+iWeeklyCloudMA1 = input.int(title='Between MA #', defval=1, minval=1, maxval=4, inline='I18b', display=display.data_window)
+iWeeklyCloudMA2 = input.int(title='and #', defval=2, minval=1, maxval=4, inline='I18b', display=display.data_window)
+
+
+//---------------------------------------------------
+// Monthly
+//---------------------------------------------------
+iMonthlyMA1Visible = input.bool(title='', defval=true, inline='I19', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA1Length = input.int(title='Period', minval=1, maxval=5000, defval=10, inline='I19', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA1Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I19', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA1Source = input.source(title='', defval=close, inline='I19', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA1Color = input.color(title='', defval=color.green, inline='I19', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA1Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I19w', group='Monthly Moving Averages', display=display.data_window)
+
+iMonthlyMA2Visible = input.bool(title='', defval=true, inline='I20', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA2Length = input.int(title='Period', minval=1, maxval=5000, defval=24, inline='I20', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA2Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I20', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA2Source = input.source(title='', defval=close, inline='I20', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA2Color = input.color(title='', defval=color.purple, inline='I20', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA2Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I20w', group='Monthly Moving Averages', display=display.data_window)
+
+iMonthlyMA3Visible = input.bool(title='', defval=true, inline='I21', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA3Length = input.int(title='Period', minval=1, maxval=5000, defval=48, inline='I21', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA3Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I21', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA3Source = input.source(title='', defval=close, inline='I21', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA3Color = input.color(title='', defval=color.red, inline='I21', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA3Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I21w', group='Monthly Moving Averages', display=display.data_window)
+
+iMonthlyMA4Visible = input.bool(title='', defval=false, inline='I22', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA4Length = input.int(title='Period', minval=1, maxval=5000, defval=96, inline='I22', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA4Type = input.string(title='', options=['SMA', 'EMA', 'RMA', 'VWMA', 'WMA'], defval='SMA', inline='I22', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA4Source = input.source(title='', defval=close, inline='I22', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA4Color = input.color(title='', defval=color.gray, inline='I22', group='Monthly Moving Averages', display=display.data_window)
+iMonthlyMA4Width = input.int(title='Width', defval=1, minval=1, maxval=4, inline='I22w', group='Monthly Moving Averages', display=display.data_window)
+
+iMonthlyCloud = input.bool(title='Show Moving Average Cloud', defval=false, inline='I23', display=display.data_window, tooltip='Fill area between two selected moving averages ' +
+     '(pick which ones below). At a glance, you can see if the slower moving average is above or below the faster moving average.')
+iMonthlyCloudColorUp = input.color(title='   Up', defval=color.new(color.green, transp=90), inline='I23', display=display.data_window)
+iMonthlyCloudColorDown = input.color(title='Down', defval=color.new(color.red, transp=90), inline='I23', display=display.data_window)
+iMonthlyCloudMA1 = input.int(title='Between MA #', defval=1, minval=1, maxval=4, inline='I23b', display=display.data_window)
+iMonthlyCloudMA2 = input.int(title='and #', defval=2, minval=1, maxval=4, inline='I23b', display=display.data_window)
+
+//***************************************************************************************
+// Helper functions
+//***************************************************************************************
+
+// Single shared MA-type dispatcher, used by every MA slot below instead of
+// repeating a type-selector chain per slot.
+f_ma(src, len, maType) =>
+    switch maType
+        'SMA' => ta.sma(src, len)
+        'EMA' => ta.ema(src, len)
+        'RMA' => ta.rma(src, len)
+        'VWMA' => ta.vwma(src, len)
+        => ta.wma(src, len)
+
+// Picks one of up to 7 MA values by slot number (1-based), for whichever cloud
+// boundary the user selected. Timeframes with fewer than 7 MAs just pass na
+// for the unused slots — those indices are unreachable since the matching
+// "Between MA #" input's maxval caps out at that timeframe's actual MA count.
+f_pick(idx, float v1, float v2, float v3, float v4, float v5, float v6, float v7) =>
+    switch idx
+        1 => v1
+        2 => v2
+        3 => v3
+        4 => v4
+        5 => v5
+        6 => v6
+        => v7
+
+//***************************************************************************************
+// Plot moving averages
+//***************************************************************************************
+
+//---------------------------------------------------
+// Intraday
+//---------------------------------------------------
+intraMA1 = 0.0
+intraMA2 = 0.0
+intraMA3 = 0.0
+intraMA4 = 0.0
+intraMA5 = 0.0
+intraVWAP = 0.0
+if (timeframe.isintraday)
+    intraMA1 := f_ma(iIntraMA1Source, iIntraMA1Length, iIntraMA1Type)
+    intraMA2 := f_ma(iIntraMA2Source, iIntraMA2Length, iIntraMA2Type)
+    intraMA3 := f_ma(iIntraMA3Source, iIntraMA3Length, iIntraMA3Type)
+    intraMA4 := f_ma(iIntraMA4Source, iIntraMA4Length, iIntraMA4Type)
+    intraMA5 := f_ma(iIntraMA5Source, iIntraMA5Length, iIntraMA5Type)
+    intraVWAP := ta.vwap(iIntraVWAPSource)
+
+i1 = plot(iIntraMA1Visible and timeframe.isintraday ? intraMA1 : na, title='Intraday Moving Average #1', color=iIntraMA1Color, linewidth=iIntraMA1Width)
+i2 = plot(iIntraMA2Visible and timeframe.isintraday ? intraMA2 : na, title='Intraday Moving Average #2', color=iIntraMA2Color, linewidth=iIntraMA2Width)
+i3 = plot(iIntraMA3Visible and timeframe.isintraday ? intraMA3 : na, title='Intraday Moving Average #3', color=iIntraMA3Color, linewidth=iIntraMA3Width)
+i4 = plot(iIntraMA4Visible and timeframe.isintraday ? intraMA4 : na, title='Intraday Moving Average #4', color=iIntraMA4Color, linewidth=iIntraMA4Width)
+i5 = plot(iIntraMA5Visible and timeframe.isintraday ? intraMA5 : na, title='Intraday Moving Average #5', color=iIntraMA5Color, linewidth=iIntraMA5Width)
+
+// Show moving average cloud, between whichever two MAs were selected. Rather
+// than trying to dynamically re-point a plot reference at one of the existing
+// MA plots (Pine ties a plot to its original data series and won't let it be
+// reassigned to a different one), two new invisible plots are drawn from the
+// already-selected values, and the fill runs between those instead.
+intraCloudValA = f_pick(iIntraCloudMA1, intraMA1, intraMA2, intraMA3, intraMA4, intraMA5, na, na)
+intraCloudValB = f_pick(iIntraCloudMA2, intraMA1, intraMA2, intraMA3, intraMA4, intraMA5, na, na)
+fillColor = color.rgb(0, 0, 0, 100)  // Transparent
+if (iIntraCloud)
+    fillColor := intraCloudValA < intraCloudValB ? iIntraCloudColorDown : iIntraCloudColorUp
+intraCloudPlotA = plot(iIntraCloud and timeframe.isintraday ? intraCloudValA : na, title='Intraday Cloud Boundary A', display=display.none)
+intraCloudPlotB = plot(iIntraCloud and timeframe.isintraday ? intraCloudValB : na, title='Intraday Cloud Boundary B', display=display.none)
+fill(intraCloudPlotA, intraCloudPlotB, color=fillColor)
+
+plot(iIntraVWAPVisible and timeframe.isintraday ? intraVWAP : na, title='Intraday Volume Weighted Average Price', color=iIntraVWAPColor, linewidth=iIntraVWAPWidth)
+
+//---------------------------------------------------
+// Daily
+//---------------------------------------------------
+dailyMA1 = 0.0
+dailyMA2 = 0.0
+dailyMA3 = 0.0
+dailyMA4 = 0.0
+dailyMA5 = 0.0
+dailyMA6 = 0.0
+dailyMA7 = 0.0
+if (timeframe.isdaily)
+    dailyMA1 := f_ma(iDailyMA1Source, iDailyMA1Length, iDailyMA1Type)
+    dailyMA2 := f_ma(iDailyMA2Source, iDailyMA2Length, iDailyMA2Type)
+    dailyMA3 := f_ma(iDailyMA3Source, iDailyMA3Length, iDailyMA3Type)
+    dailyMA4 := f_ma(iDailyMA4Source, iDailyMA4Length, iDailyMA4Type)
+    dailyMA5 := f_ma(iDailyMA5Source, iDailyMA5Length, iDailyMA5Type)
+    dailyMA6 := f_ma(iDailyMA6Source, iDailyMA6Length, iDailyMA6Type)
+    dailyMA7 := f_ma(iDailyMA7Source, iDailyMA7Length, iDailyMA7Type)
+
+d1 = plot(iDailyMA1Visible and timeframe.isdaily ? dailyMA1 : na, title='Daily Moving Average #1', color=iDailyMA1Color, linewidth=iDailyMA1Width)
+d2 = plot(iDailyMA2Visible and timeframe.isdaily ? dailyMA2 : na, title='Daily Moving Average #2', color=iDailyMA2Color, linewidth=iDailyMA2Width)
+d3 = plot(iDailyMA3Visible and timeframe.isdaily ? dailyMA3 : na, title='Daily Moving Average #3', color=iDailyMA3Color, linewidth=iDailyMA3Width)
+d4 = plot(iDailyMA4Visible and timeframe.isdaily ? dailyMA4 : na, title='Daily Moving Average #4', color=iDailyMA4Color, linewidth=iDailyMA4Width)
+d5 = plot(iDailyMA5Visible and timeframe.isdaily ? dailyMA5 : na, title='Daily Moving Average #5', color=iDailyMA5Color, linewidth=iDailyMA5Width)
+d6 = plot(iDailyMA6Visible and timeframe.isdaily ? dailyMA6 : na, title='Daily Moving Average #6', color=iDailyMA6Color, linewidth=iDailyMA6Width)
+d7 = plot(iDailyMA7Visible and timeframe.isdaily ? dailyMA7 : na, title='Daily Moving Average #6', color=iDailyMA7Color, linewidth=iDailyMA7Width)
+
+// Show weekly on daily
+w = request.security(syminfo.tickerid, 'W', f_ma(close, iWeeklyOnDailyLength, iWeeklyOnDailyType), lookahead = barmerge.lookahead_on)
+plot(iWeeklyOnDaily and timeframe.isdaily ? w : na, color=iWeeklyOnDailyColor, linewidth=iWeeklyOnDailyWidth)
+
+// Show moving average cloud, between whichever two MAs were selected
+dailyCloudValA = f_pick(iDailyCloudMA1, dailyMA1, dailyMA2, dailyMA3, dailyMA4, dailyMA5, dailyMA6, dailyMA7)
+dailyCloudValB = f_pick(iDailyCloudMA2, dailyMA1, dailyMA2, dailyMA3, dailyMA4, dailyMA5, dailyMA6, dailyMA7)
+fillColor := color.rgb(0, 0, 0, 100)  // Transparent
+if (iDailyCloud)
+    fillColor := dailyCloudValA < dailyCloudValB ? iDailyCloudColorDown : iDailyCloudColorUp
+dailyCloudPlotA = plot(iDailyCloud and timeframe.isdaily ? dailyCloudValA : na, title='Daily Cloud Boundary A', display=display.none)
+dailyCloudPlotB = plot(iDailyCloud and timeframe.isdaily ? dailyCloudValB : na, title='Daily Cloud Boundary B', display=display.none)
+fill(dailyCloudPlotA, dailyCloudPlotB, color=fillColor)
+
+//---------------------------------------------------
+// Weekly
+//---------------------------------------------------
+weeklyMA1 = 0.0
+weeklyMA2 = 0.0
+weeklyMA3 = 0.0
+weeklyMA4 = 0.0
+if timeframe.isweekly
+    weeklyMA1 := f_ma(iWeeklyMA1Source, iWeeklyMA1Length, iWeeklyMA1Type)
+    weeklyMA2 := f_ma(iWeeklyMA2Source, iWeeklyMA2Length, iWeeklyMA2Type)
+    weeklyMA3 := f_ma(iWeeklyMA3Source, iWeeklyMA3Length, iWeeklyMA3Type)
+    weeklyMA4 := f_ma(iWeeklyMA4Source, iWeeklyMA4Length, iWeeklyMA4Type)
+
+w1 = plot(iWeeklyMA1Visible and timeframe.isweekly ? weeklyMA1 : na, title='Weekly Moving Average #1', color=iWeeklyMA1Color, linewidth=iWeeklyMA1Width)
+w2 = plot(iWeeklyMA2Visible and timeframe.isweekly ? weeklyMA2 : na, title='Weekly Moving Average #2', color=iWeeklyMA2Color, linewidth=iWeeklyMA2Width)
+w3 = plot(iWeeklyMA3Visible and timeframe.isweekly ? weeklyMA3 : na, title='Weekly Moving Average #3', color=iWeeklyMA3Color, linewidth=iWeeklyMA3Width)
+w4 = plot(iWeeklyMA4Visible and timeframe.isweekly ? weeklyMA4 : na, title='Weekly Moving Average #4', color=iWeeklyMA4Color, linewidth=iWeeklyMA4Width)
+
+// Show moving average cloud, between whichever two MAs were selected
+weeklyCloudValA = f_pick(iWeeklyCloudMA1, weeklyMA1, weeklyMA2, weeklyMA3, weeklyMA4, na, na, na)
+weeklyCloudValB = f_pick(iWeeklyCloudMA2, weeklyMA1, weeklyMA2, weeklyMA3, weeklyMA4, na, na, na)
+fillColor := color.rgb(0, 0, 0, 100)  // Transparent
+if (iWeeklyCloud)
+    fillColor := weeklyCloudValA < weeklyCloudValB ? iWeeklyCloudColorDown : iWeeklyCloudColorUp
+weeklyCloudPlotA = plot(iWeeklyCloud and timeframe.isweekly ? weeklyCloudValA : na, title='Weekly Cloud Boundary A', display=display.none)
+weeklyCloudPlotB = plot(iWeeklyCloud and timeframe.isweekly ? weeklyCloudValB : na, title='Weekly Cloud Boundary B', display=display.none)
+fill(weeklyCloudPlotA, weeklyCloudPlotB, color=fillColor)
+
+
+//---------------------------------------------------
+// Monthly
+//---------------------------------------------------
+monthlyMA1 = 0.0
+monthlyMA2 = 0.0
+monthlyMA3 = 0.0
+monthlyMA4 = 0.0
+if (timeframe.ismonthly)
+    monthlyMA1 := f_ma(iMonthlyMA1Source, iMonthlyMA1Length, iMonthlyMA1Type)
+    monthlyMA2 := f_ma(iMonthlyMA2Source, iMonthlyMA2Length, iMonthlyMA2Type)
+    monthlyMA3 := f_ma(iMonthlyMA3Source, iMonthlyMA3Length, iMonthlyMA3Type)
+    monthlyMA4 := f_ma(iMonthlyMA4Source, iMonthlyMA4Length, iMonthlyMA4Type)
+
+m1 = plot(iMonthlyMA1Visible and timeframe.ismonthly ? monthlyMA1 : na, title='Monthly Moving Average #1', color=iMonthlyMA1Color, linewidth=iMonthlyMA1Width)
+m2 = plot(iMonthlyMA2Visible and timeframe.ismonthly ? monthlyMA2 : na, title='Monthly Moving Average #2', color=iMonthlyMA2Color, linewidth=iMonthlyMA2Width)
+m3 = plot(iMonthlyMA3Visible and timeframe.ismonthly ? monthlyMA3 : na, title='Monthly Moving Average #3', color=iMonthlyMA3Color, linewidth=iMonthlyMA3Width)
+m4 = plot(iMonthlyMA4Visible and timeframe.ismonthly ? monthlyMA4 : na, title='Monthly Moving Average #4', color=iMonthlyMA4Color, linewidth=iMonthlyMA4Width)
+
+// Show moving average cloud, between whichever two MAs were selected
+monthlyCloudValA = f_pick(iMonthlyCloudMA1, monthlyMA1, monthlyMA2, monthlyMA3, monthlyMA4, na, na, na)
+monthlyCloudValB = f_pick(iMonthlyCloudMA2, monthlyMA1, monthlyMA2, monthlyMA3, monthlyMA4, na, na, na)
+fillColor := color.rgb(0, 0, 0, 100)  // Transparent
+if (iMonthlyCloud)
+    fillColor := monthlyCloudValA < monthlyCloudValB ? iMonthlyCloudColorDown : iMonthlyCloudColorUp
+monthlyCloudPlotA = plot(iMonthlyCloud and timeframe.ismonthly ? monthlyCloudValA : na, title='Monthly Cloud Boundary A', display=display.none)
+monthlyCloudPlotB = plot(iMonthlyCloud and timeframe.ismonthly ? monthlyCloudValB : na, title='Monthly Cloud Boundary B', display=display.none)
+fill(monthlyCloudPlotA, monthlyCloudPlotB, color=fillColor)

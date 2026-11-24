@@ -1,0 +1,68 @@
+//@version=6
+import StocksDeveloper/StocksDeveloperAlerts/1 as atw
+
+strategy("Long Straddle", overlay = true, calc_on_every_tick = true)
+
+// A long straddle buys a call and a put at the same at-the-money strike. It aims
+// to profit from a big move in either direction, so it is essentially a market
+// or direction-neutral strategy. Here we use a moving-average crossover only to
+// spot a possible big move — you can replace it with any signal you like.
+
+// ----- Account -----
+i_account = input.string("ACC_NICK_NAME", "Account or Group name",
+     tooltip = "Your Pseudo account name, or a Group name to trade many accounts at once",
+     group = "Account")
+i_useGroup = input.bool(false, "This is a Group account",
+     tooltip = "Tick this if the name above is a Group account", group = "Account")
+
+// ----- Instrument -----
+i_symbol = input.string("BANKNIFTY", "Underlier symbol",
+     tooltip = "Underlier, e.g. NIFTY or BANKNIFTY", group = "Instrument")
+i_exchange = input.string("NFO", "Options exchange code",
+     tooltip = "Options exchange code, e.g. NFO", group = "Instrument")
+i_expiry = input.string("weekly", "Expiry",
+     tooltip = "weekly, next, monthly, or an exact date like 10-JUL-2026",
+     group = "Instrument")
+
+// ----- Strategy -----
+i_product = input.string("NORMAL", "Product type",
+     tooltip = "INTRADAY, DELIVERY or NORMAL", group = "Strategy")
+i_lots = input.int(1, "Lots", minval = 1,
+     tooltip = "Number of lots for each leg", group = "Strategy")
+i_shortPeriod = input.int(50, "Short MA Period", minval = 2, group = "Strategy")
+i_longPeriod = input.int(200, "Long MA Period", minval = 3, group = "Strategy")
+
+// ----- Order type -----
+// Some brokers block MARKET orders in options. If so, tick "Use LIMIT orders"
+// and set a limit price well above the option price so it fills like a market
+// order (but keep it below the circuit limit).
+i_useLimit = input.bool(false, "Use LIMIT orders", group = "Order")
+i_price = input.float(0, "Limit price (only if using LIMIT)", minval = 0,
+     group = "Order")
+
+// Build the straddle alert message. AutoTrader Web picks the at-the-money strike
+// and the right expiry contract for you — no strike maths, no symbol building.
+msg = atw.straddle(symbol = i_symbol, exchange = i_exchange, producttype = i_product,
+     account = i_useGroup ? "" : i_account,
+     group = i_useGroup ? i_account : "",
+     lots = i_lots, expiry = i_expiry,
+     ordertype = i_useLimit ? "LIMIT" : "MARKET",
+     price = i_useLimit ? i_price : 0)
+
+// Moving averages, used only to spot a possible big move
+shortAvg = ta.sma(close, i_shortPeriod)
+longAvg = ta.sma(close, i_longPeriod)
+plot(shortAvg, "Short MA", color = color.red, linewidth = 2)
+plot(longAvg, "Long MA", color = color.blue, linewidth = 2)
+
+longCondition = ta.crossover(shortAvg, longAvg)
+shortCondition = ta.crossunder(shortAvg, longAvg)
+
+// Enter a long straddle on either signal. The Up/Down label is only for the
+// TradingView chart — both simply send the same buy-call + buy-put straddle to
+// your account.
+if longCondition
+    strategy.entry("Up", strategy.long, alert_message = msg)
+
+if shortCondition
+    strategy.entry("Down", strategy.short, alert_message = msg)

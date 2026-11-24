@@ -1,0 +1,144 @@
+//@version=6
+indicator("EQH / EQL Liquidity", shorttitle = "EQH/EQL", overlay = true,
+     max_lines_count = 500, max_labels_count = 100)
+
+// ─── INPUTS
+gL         = "Liquidity"
+pivLen     = input.int(5,      "Pivot Length",              minval = 1, group = gL)
+tolPct     = input.float(0.15, "Equal Tolerance %",         minval = 0.0, step = 0.01, group = gL)
+minBars    = input.int(10,     "Min Bars Between Pivots",   minval = 1, group = gL)
+maxMem     = input.int(6,      "Remember N Pivots",         minval = 2, maxval = 20, group = gL)
+minProm    = input.float(0.5,  "Min Pivot Prominence (ATR)", minval = 0.0, step = 0.1, group = gL)
+extend     = input.int(20,     "Extend Right (bars)",       minval = 0, group = gL)
+sweepBuf   = input.float(0.05, "Sweep Buffer (% of level)", minval = 0.0, step = 0.01, group = gL)
+maxBack    = input.int(500,    "Max Historical Lookback",   minval = 50, group = gL)
+
+gV         = "Visuals"
+showBSL    = input.bool(true,  "Show Buyside (EQH)",        group = gV)
+showSSL    = input.bool(true,  "Show Sellside (EQL)",       group = gV)
+bslCol     = input.color(color.blue, "Buyside (EQH) Color", group = gV)
+sslCol     = input.color(color.red,  "Sellside (EQL) Color", group = gV)
+lineWid    = input.int(2,      "Line Width",  minval = 1, maxval = 4, group = gV)
+showTag    = input.bool(true,  "Show EQH / EQL Tag",        group = gV)
+
+// ─── GLOBAL ta.* 
+atrNow  = ta.atr(14)
+lowRef  = ta.lowest(low,   pivLen * 2)[pivLen]
+highRef = ta.highest(high, pivLen * 2)[pivLen]
+
+// ─── PIVOTS 
+ph = ta.pivothigh(high, pivLen, pivLen)
+pl = ta.pivotlow(low,   pivLen, pivLen)
+
+// ─── STORAGE 
+var array<float> rH  = array.new<float>()
+var array<int>   rHb = array.new<int>()
+var array<float> rL  = array.new<float>()
+var array<int>   rLb = array.new<int>()
+
+var array<line>  zLn   = array.new<line>()
+var array<label> zTg   = array.new<label>()
+var array<float> zPx   = array.new<float>()
+var array<bool>  zIsHi = array.new<bool>()
+var array<int>   zBar  = array.new<int>()
+
+// ─── HELPERS 
+zoneNear(float p, bool isHigh) =>
+    e = false
+    n = array.size(zPx)
+    if n > 0
+        for i = 0 to n - 1
+            zp   = array.get(zPx, i)
+            same = array.get(zIsHi, i) == isHigh
+            if same and math.abs(p - zp) / zp * 100 <= tolPct * 2.0
+                e := true
+                break
+    e
+
+// ─── DRAW LIQUIDITY 
+drawLiq(array<float> lvls, array<int> brs, float pvt, int currPivBar, bool isHigh) =>
+    if not na(pvt)
+        promHi = pvt - lowRef
+        promLo = highRef - pvt
+        prom   = isHigh ? promHi : promLo
+        passes = prom >= atrNow * minProm
+
+        if passes
+            n   = array.size(lvls)
+            hit = false
+            mL  = 0.0
+            mB  = 0
+            if n > 0
+                for i = 0 to n - 1
+                    lvl  = array.get(lvls, i)
+                    bri  = array.get(brs, i)
+                    dist = currPivBar - bri
+                    if math.abs(pvt - lvl) / lvl * 100 <= tolPct and dist >= minBars
+                        hit := true
+                        mL  := lvl
+                        mB  := bri
+                        break
+            if hit
+                // Level = shallower of the two (the target price stops rest at)
+                lvl = isHigh ? math.min(pvt, mL) : math.max(pvt, mL)
+                buf = lvl * sweepBuf / 100.0
+
+                // Walk every bar from the FIRST pivot to the current bar
+                // and see if price has already pierced the level.
+                alreadySwept = false
+                lb = math.min(bar_index - mB, maxBack)
+                if lb >= 0
+                    for k = 0 to lb
+                        if isHigh
+                            if high[k] > lvl + buf
+                                alreadySwept := true
+                                break
+                        else
+                            if low[k] < lvl - buf
+                                alreadySwept := true
+                                break
+
+                if not alreadySwept and not zoneNear(lvl, isHigh)
+                    col = isHigh ? bslCol : sslCol
+                    ln  = line.new(mB, lvl, bar_index + extend, lvl, color = col, width = lineWid)
+                    lblTxt = isHigh ? "EQH" : "EQL"
+                    lblSty = isHigh ? label.style_label_down : label.style_label_up
+                    lb2 = showTag ? label.new(bar_index + extend, lvl, lblTxt, style = lblSty, color = color.new(col, 20), textcolor = color.white, size = size.tiny) : na
+                    array.push(zLn,   ln)
+                    array.push(zTg,   lb2)
+                    array.push(zPx,   lvl)
+                    array.push(zIsHi, isHigh)
+                    array.push(zBar,  bar_index)
+            array.push(lvls, pvt)
+            array.push(brs,  currPivBar)
+            while array.size(lvls) > maxMem
+                array.shift(lvls)
+                array.shift(brs)
+
+if showBSL
+    drawLiq(rH, rHb, ph, bar_index - pivLen, true)
+if showSSL
+    drawLiq(rL, rLb, pl, bar_index - pivLen, false)
+
+// ─── SWEEP DETECTION — DELETE ON HUNT (ongoing)
+if array.size(zPx) > 0
+    for i = array.size(zPx) - 1 to 0
+        if bar_index > array.get(zBar, i)
+            lvl   = array.get(zPx, i)
+            isHi  = array.get(zIsHi, i)
+            buf   = lvl * sweepBuf / 100.0
+            swept = isHi ? high > lvl + buf : low < lvl - buf
+            if swept
+                line.delete(array.get(zLn, i))
+                lbl = array.get(zTg, i)
+                if not na(lbl)
+                    label.delete(lbl)
+                array.remove(zLn,   i)
+                array.remove(zTg,   i)
+                array.remove(zPx,   i)
+                array.remove(zIsHi, i)
+                array.remove(zBar,  i)
+
+// ─── ALERTS 
+alertcondition(showBSL, "EQH formed", "Equal highs detected on {{ticker}}")
+alertcondition(showSSL, "EQL formed", "Equal lows detected on {{ticker}}")

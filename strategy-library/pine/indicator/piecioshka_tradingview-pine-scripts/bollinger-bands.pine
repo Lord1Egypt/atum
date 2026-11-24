@@ -1,0 +1,48 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Piotr Kowalski "piecioshka"
+// Docs (EN): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/bollinger-bands/bollinger-bands.md
+// Docs (PL): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/bollinger-bands/bollinger-bands.pl.md
+
+// @version=6
+indicator('Bollinger Bands', overlay = true, max_labels_count=500)
+
+aColor = color.rgb(114, 48, 131)
+bColor = color.rgb(240, 199, 58)
+
+len = input.int(20, 'SMA')
+mult = input.float(2.0, 'StdDev', minval=0.001, step=0.5)
+showTrades = input.bool(true, 'Signal markers', tooltip='Mean-reversion signals as markers: below the candle (long) when close drops below the lower band (bet on a return to the mean), above the candle (sell) when close rises above the upper band. Shape and size in the Appearance group.')
+
+gA = 'Appearance'
+shapeName = input.string('Triangle', 'Marker shape', options=['Triangle', 'Arrow', 'Label arrow', 'Circle', 'Diamond'], group=gA, tooltip='Triangle - solid triangle.\nArrow - small thin arrow.\nLabel arrow - arrow-shaped label bubble.\nCircle / Diamond - neutral dot markers.')
+sizeName  = input.string('Small', 'Marker size', options=['Tiny', 'Small', 'Normal', 'Large'], group=gA)
+
+// Markers as labels - the shape is picked from an input, which plotshape() cannot do (its style must be a constant).
+upStyle    = shapeName == 'Arrow' ? label.style_arrowup : shapeName == 'Label arrow' ? label.style_label_up : shapeName == 'Circle' ? label.style_circle : shapeName == 'Diamond' ? label.style_diamond : label.style_triangleup
+downStyle  = shapeName == 'Arrow' ? label.style_arrowdown : shapeName == 'Label arrow' ? label.style_label_down : shapeName == 'Circle' ? label.style_circle : shapeName == 'Diamond' ? label.style_diamond : label.style_triangledown
+markerSize = sizeName == 'Tiny' ? size.tiny : sizeName == 'Normal' ? size.normal : sizeName == 'Large' ? size.large : size.small
+
+std = ta.stdev(close, len)
+sma = ta.sma(close, len)
+upper = sma + mult * std
+lower = sma - mult * std
+
+center = plot(sma, color=color.new(color.white, 30), force_overlay=true)
+plotUpper = plot(upper, color=aColor, force_overlay=true)
+plotLower = plot(lower, color=bColor, force_overlay=true)
+
+fill(plotUpper, center, color = color.new(aColor, 90))
+fill(center, plotLower, color = color.new(bColor, 90))
+
+// --- Signal markers (mean reversion on the bands) ---
+longTrade = ta.crossunder(close, lower)
+sellTrade = ta.crossover(close, upper)
+
+if showTrades and longTrade
+    label.new(bar_index, na, '', yloc=yloc.belowbar, style=upStyle, color=color.green, size=markerSize)
+if showTrades and sellTrade
+    label.new(bar_index, na, '', yloc=yloc.abovebar, style=downStyle, color=color.red, size=markerSize)
+
+// --- Alerts ---
+alertcondition(longTrade, 'BB: below the lower band', 'Price closed below the lower Bollinger band (mean reversion long setup)')
+alertcondition(sellTrade, 'BB: above the upper band', 'Price closed above the upper Bollinger band (mean reversion short setup)')

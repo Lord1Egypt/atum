@@ -1,0 +1,230 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Piotr Kowalski "piecioshka"
+// Docs (EN): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/vertical-hour-lines/vertical-hour-lines.md
+// Docs (PL): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/vertical-hour-lines/vertical-hour-lines.pl.md
+
+//@version=6
+// Draws vertical lines at the given hours — up to 10 slots, each with its own
+// color, style, and width. Lines appear on the bar where the given hour's
+// threshold is first crossed (works on any intraday timeframe, including ones
+// that do not hit the hour exactly).
+indicator('Vertical Hour Lines', overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+GRP = 'Lines'
+DEF_COLOR = color.new(#BA8FFF, 70)
+DEF_STYLE = 'Dashed'
+
+// Default slots mark the session structure of a European trading day, and the
+// colors rank them by how much the hour usually matters: the US cash open is
+// the loudest, the quiet hours are muted. All times are Warsaw local, matching
+// the default time zone below.
+C_QUIET = color.new(#787B86, 70)   // gray - pre-open, little volume yet
+C_ACTIVE = color.new(#2196F3, 70)  // blue - European session under way
+C_MAJOR = color.new(#F23645, 70)   // red - the US cash open, the loudest hour
+C_LATE = color.new(#FF9800, 70)    // orange - final hour of the US session
+C_CLOSE = color.new(#363A45, 70)   // dark gray - the day winding down
+
+on1 = input.bool(true, 'Enable', inline = '1', group = GRP)
+at1 = input.string('08:30', '', inline = '1', group = GRP)
+color1 = input.color(C_QUIET, '', inline = '1', group = GRP)
+style1 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '1', group = GRP)
+width1 = input.int(1, '', minval = 1, maxval = 4, inline = '1', group = GRP)
+
+on2 = input.bool(true, 'Enable', inline = '2', group = GRP)
+at2 = input.string('10:30', '', inline = '2', group = GRP)
+color2 = input.color(C_ACTIVE, '', inline = '2', group = GRP)
+style2 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '2', group = GRP)
+width2 = input.int(1, '', minval = 1, maxval = 4, inline = '2', group = GRP)
+
+on3 = input.bool(true, 'Enable', inline = '3', group = GRP)
+at3 = input.string('15:30', '', inline = '3', group = GRP)
+color3 = input.color(C_MAJOR, '', inline = '3', group = GRP)
+style3 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '3', group = GRP)
+width3 = input.int(1, '', minval = 1, maxval = 4, inline = '3', group = GRP)
+
+on4 = input.bool(true, 'Enable', inline = '4', group = GRP)
+at4 = input.string('20:30', '', inline = '4', group = GRP)
+color4 = input.color(C_LATE, '', inline = '4', group = GRP)
+style4 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '4', group = GRP)
+width4 = input.int(1, '', minval = 1, maxval = 4, inline = '4', group = GRP)
+
+on5 = input.bool(true, 'Enable', inline = '5', group = GRP)
+at5 = input.string('23:00', '', inline = '5', group = GRP)
+color5 = input.color(C_CLOSE, '', inline = '5', group = GRP)
+style5 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '5', group = GRP)
+width5 = input.int(1, '', minval = 1, maxval = 4, inline = '5', group = GRP)
+
+on6 = input.bool(false, 'Enable', inline = '6', group = GRP)
+at6 = input.string('09:00', '', inline = '6', group = GRP)
+color6 = input.color(DEF_COLOR, '', inline = '6', group = GRP)
+style6 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '6', group = GRP)
+width6 = input.int(1, '', minval = 1, maxval = 4, inline = '6', group = GRP)
+
+on7 = input.bool(false, 'Enable', inline = '7', group = GRP)
+at7 = input.string('09:00', '', inline = '7', group = GRP)
+color7 = input.color(DEF_COLOR, '', inline = '7', group = GRP)
+style7 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '7', group = GRP)
+width7 = input.int(1, '', minval = 1, maxval = 4, inline = '7', group = GRP)
+
+on8 = input.bool(false, 'Enable', inline = '8', group = GRP)
+at8 = input.string('09:00', '', inline = '8', group = GRP)
+color8 = input.color(DEF_COLOR, '', inline = '8', group = GRP)
+style8 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '8', group = GRP)
+width8 = input.int(1, '', minval = 1, maxval = 4, inline = '8', group = GRP)
+
+on9 = input.bool(false, 'Enable', inline = '9', group = GRP)
+at9 = input.string('09:00', '', inline = '9', group = GRP)
+color9 = input.color(DEF_COLOR, '', inline = '9', group = GRP)
+style9 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '9', group = GRP)
+width9 = input.int(1, '', minval = 1, maxval = 4, inline = '9', group = GRP)
+
+on10 = input.bool(false, 'Enable', inline = '10', group = GRP)
+at10 = input.string('09:00', '', inline = '10', group = GRP)
+color10 = input.color(DEF_COLOR, '', inline = '10', group = GRP)
+style10 = input.string(DEF_STYLE, '', options = ['Solid', 'Dashed', 'Dotted'], inline = '10', group = GRP)
+width10 = input.int(1, '', minval = 1, maxval = 4, inline = '10', group = GRP)
+
+// Hours are computed in this time zone. Default is "Warsaw" because the chart
+// time axis usually shows the user's time zone, not the exchange's — with the
+// exchange time zone the lines land shifted relative to what the axis shows.
+tzMode = input.string('Warsaw', 'Time zone', options = ['Warsaw', 'London', 'New York', 'Exchange', 'UTC', 'Custom'], group = 'General')
+tzCustom = input.string('Europe/Warsaw', 'Custom time zone (IANA)', group = 'General', tooltip = 'Used only when "Custom" is selected. E.g. Europe/Berlin, America/Chicago, Asia/Tokyo.')
+extendMode = input.string('Whole chart', 'Extend', options = ['Whole chart', 'Only up', 'Only down'], group = 'General')
+
+// Bottom legend: the hour printed at the bottom of the pane, under each
+// vertical line, on a badge in that line's own color. Pine cannot write on the
+// chart's time axis (that belongs to TradingView itself, e.g. the "Time label"
+// option of the manual Vertical Line tool), so the labels sit just above it,
+// inside the pane.
+showLabels = input.bool(true, 'Show hour labels', group = 'Labels')
+labelTextMode = input.string('Auto', 'Label text color', options = ['Auto', 'White', 'Black'], group = 'Labels', tooltip = 'Auto picks black or white per badge, whichever contrasts better with that line\'s color. Pick White or Black to force one for every badge.')
+labelBgTransp = input.int(30, 'Label background transparency', minval = 0, maxval = 100, group = 'Labels', tooltip = 'One value for every badge, independent of the transparency set on the lines themselves: 0 is solid, 100 is fully invisible. Note that Auto text color is computed from the line\'s own color and does not follow this setting, so at high transparency the automatic choice may stop being the readable one - force White or Black there.')
+labelSize = input.string('Small', 'Label size', options = ['Tiny', 'Small', 'Normal', 'Large'], group = 'Labels')
+
+tz = switch tzMode
+    'Warsaw' => 'Europe/Warsaw'
+    'London' => 'Europe/London'
+    'New York' => 'America/New_York'
+    'Exchange' => syminfo.timezone
+    'UTC' => 'UTC'
+    => tzCustom
+
+lineStyleOf(string name) =>
+    switch name
+        'Solid' => line.style_solid
+        'Dotted' => line.style_dotted
+        => line.style_dashed
+
+labelSizeOf(string name) =>
+    switch name
+        'Tiny' => size.tiny
+        'Normal' => size.normal
+        'Large' => size.large
+        => size.small
+
+// Black or white text, whichever contrasts better with the badge behind it.
+//
+// Uses relative luminance as defined by WCAG (sRGB components linearized, then
+// weighted 0.2126/0.7152/0.0722 - green carries most of the perceived
+// brightness). Black text wins above a luminance of 0.1791, the point where the
+// two contrast ratios meet: (L+0.05)/0.05 = 1.05/(L+0.05). The cheaper trick of
+// thresholding a weighted average of the raw components gets this wrong on
+// mid-tone hues - on TradingView's own teal and red it picks white where black
+// contrasts roughly twice as well.
+//
+// Every color in TradingView's palette clears WCAG AA (4.5:1) this way, the
+// tightest being gray at 4.98:1.
+LUMA_THRESHOLD = 0.1791
+
+channelLuma(float raw) =>
+    c = raw / 255
+    c <= 0.03928 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4)
+
+autoTextColor(color bg) =>
+    luma = 0.2126 * channelLuma(color.r(bg)) + 0.7152 * channelLuma(color.g(bg)) + 0.0722 * channelLuma(color.b(bg))
+    luma > LUMA_THRESHOLD ? #000000 : #FFFFFF
+
+textColorFor(color bg) =>
+    switch labelTextMode
+        'White' => #FFFFFF
+        'Black' => #000000
+        => autoTextColor(bg)
+
+extendOf = switch extendMode
+    'Only up' => extend.right
+    'Only down' => extend.left
+    => extend.both
+
+// Every label has to sit at the SAME price, or the legend is a ragged line
+// instead of a row. Labels are therefore created at a provisional height as the
+// script runs, and moved to the final one in a single sweep on the last bar -
+// moving existing labels is cheap, whereas creating a few hundred of them in
+// one pass exceeds the script's execution budget and the indicator dies with a
+// runtime error before drawing anything at all (measured: 308 labels).
+//
+// The height itself comes from a window of RECENT bars, not the whole loaded
+// history. Two measurements on Brent, both of which put the legend out of the
+// frame: the all-time low (~69 against a price of ~103) sits a third of the way
+// below the visible area, and a height frozen early in the history (92.26) is
+// left behind as the price moves away from it. A window ending on the last bar
+// tracks whatever the price scale is actually showing.
+ANCHOR_LOOKBACK = 300
+BOTTOM_PAD = 0.06
+
+windowLow = ta.lowest(low, ANCHOR_LOOKBACK)
+windowHigh = ta.highest(high, ANCHOR_LOOKBACK)
+labelAnchor = windowLow - math.max(windowHigh - windowLow, syminfo.mintick) * BOTTOM_PAD
+
+// "10:30" -> 630 minutes from midnight; returns na for a malformed value
+minutesOf(string hhmm) =>
+    parts = str.split(str.replace_all(hhmm, ' ', ''), ':')
+    int result = na
+    if array.size(parts) == 2
+        h = str.tonumber(array.get(parts, 0))
+        m = str.tonumber(array.get(parts, 1))
+        if not na(h) and not na(m) and h >= 0 and h <= 23 and m >= 0 and m <= 59
+            result := int(h) * 60 + int(m)
+    result
+
+nowMinutes = hour(time, tz) * 60 + minute(time, tz)
+prevMinutes = nowMinutes[1]
+newDay = dayofmonth(time, tz) != dayofmonth(time[1], tz)
+
+// A bar "hits" the threshold when its time has reached it while the previous
+// bar's had not. The start-of-day reset handles the case where the first bar
+// of the session is already past the threshold (e.g. the threshold falls in a
+// trading break).
+crossedAt(int target) =>
+    firstOfDay = newDay or na(prevMinutes)
+    na(target) ? false : nowMinutes >= target and (firstOfDay or prevMinutes < target)
+
+drawAt(bool enabled, string hhmm, color col, string styleName, int width) =>
+    target = minutesOf(hhmm)
+    if enabled and crossedAt(target)
+        line.new(bar_index, low, bar_index, high, xloc = xloc.bar_index, extend = extendOf, color = col, style = lineStyleOf(styleName), width = width)
+        if showLabels
+            // The badge takes the slot's hue but its OWN transparency: the
+            // lines are deliberately faint (70% by default) and a badge
+            // inheriting that would be unreadable. The Auto text color is
+            // computed from the opaque hue, so changing the badge's
+            // transparency does not flip black text to white behind your back.
+            badge = color.new(col, labelBgTransp)
+            label.new(bar_index, labelAnchor, text = hhmm, xloc = xloc.bar_index, yloc = yloc.price, style = label.style_label_up, textcolor = textColorFor(color.new(col, 0)), color = badge, size = labelSizeOf(labelSize))
+
+drawAt(on1, at1, color1, style1, width1)
+drawAt(on2, at2, color2, style2, width2)
+drawAt(on3, at3, color3, style3, width3)
+drawAt(on4, at4, color4, style4, width4)
+drawAt(on5, at5, color5, style5, width5)
+drawAt(on6, at6, color6, style6, width6)
+drawAt(on7, at7, color7, style7, width7)
+drawAt(on8, at8, color8, style8, width8)
+drawAt(on9, at9, color9, style9, width9)
+drawAt(on10, at10, color10, style10, width10)
+
+// The sweep that levels the legend: on the last bar every label is moved to the
+// final anchor, so they all end up at one price no matter which bar created
+// them. label.all holds only this indicator's labels.
+if showLabels and barstate.islast
+    for l in label.all
+        label.set_y(l, labelAnchor)

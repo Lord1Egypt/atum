@@ -1,0 +1,70 @@
+//@version=6
+// Author: Psyll.com
+// Email: info@psyll.com
+// Website: https://psyll.com
+// Copyright: Copyright © 2025 psyll.com. All rights reserved.
+indicator('Grid Bot [Grid range plugin] Supertrend Channel [psyll]', overlay = false)
+decimal_places = 0
+tick_size = syminfo.mintick
+while tick_size < 1
+    tick_size := tick_size * 10
+    decimal_places := decimal_places + 1
+    decimal_places
+settings_group = 'Settings #################################################'
+supertrend_length = input.int(14, 'Lenght', group = settings_group, display = display.none)
+supertrend_mult = input(2, 'Mutlipler', group = settings_group, display = display.none)
+supertrend_offset = input.float(1, 'Offset', group = settings_group, display = display.none)
+smooth = input.int(1, 'Smoothness', minval = 1, group = settings_group, display = display.none)
+width_min = input.float(0, 'Min width', group = settings_group, display = display.none)
+width_max = input.float(99999, 'Max width', group = settings_group, display = display.none)
+width_min_half = width_min / 2
+width_max_half = width_max / 2
+tf_group = 'Timeframe ###############################################'
+tf_confirmation_wait = input.bool(defval = true, title = 'Wait for confirm', group = tf_group, inline = tf_group, display = display.none)
+tf_no_repaint_security = input.bool(defval = true, title = 'No repaint', group = tf_group, inline = tf_group, display = display.none)
+tf_barmerge_lookahead = input.bool(defval = false, title = 'Lookahead', group = tf_group, inline = tf_group, display = display.none)
+tf_barmerge_gaps = input.bool(defval = false, title = 'Gaps', group = tf_group, inline = tf_group, display = display.none)
+tf_type = input.string(title = 'Type', options = ['Static', 'Custom'], defval = 'Static', group = tf_group, display = display.none)
+tf_static = input.timeframe(defval = '', title = 'Static', group = tf_group, display = display.none)
+tf_custom = str.tostring(input.int(1, 'Custom', group = tf_group, display = display.none))
+tf_type_value = switch tf_type
+    'Static' => tf_static
+    'Custom' => tf_custom
+tf_security(source) =>
+    request.security(syminfo.tickerid, tf_type_value, tf_no_repaint_security ? source[barstate.isrealtime ? 1 : 0] : source, gaps = tf_barmerge_gaps ? barmerge.gaps_on : barmerge.gaps_off, lookahead = tf_barmerge_lookahead ? barmerge.lookahead_on : barmerge.lookahead_off)[tf_no_repaint_security ? barstate.isrealtime ? 0 : 1 : 0]
+display_group = 'Display ##################################################'
+price_color = input.color(color.black, 'Candles color', display = display.none, group = display_group)
+plotcandle(open, high, low, close, color = price_color, bordercolor = price_color, wickcolor = price_color, display = display.pane)
+upper = 0.
+lower = 0.
+os = 0
+max = 0.
+min = 0.
+src = tf_security(close)
+atr = tf_security(ta.atr(supertrend_length)) * supertrend_mult
+up = tf_security(hl2) + atr
+dn = tf_security(hl2) - atr
+upper := src[1] < upper[1] ? math.min(up, upper[1]) : up
+lower := src[1] > lower[1] ? math.max(dn, lower[1]) : dn
+os := src > upper ? 1 : src < lower ? 0 : os[1]
+spt = os == 1 ? lower : upper
+max := ta.cross(src, spt) ? nz(math.max(max[1], src), src) : os == 1 ? math.max(src, max[1]) : math.min(spt, max[1])
+min := ta.cross(src, spt) ? nz(math.min(min[1], src), src) : os == 0 ? math.min(src, min[1]) : math.max(spt, min[1])
+avg = math.avg(max, min)
+grid_high = max + supertrend_offset
+grid_low = min - supertrend_offset
+grid_middle = (grid_high + grid_low) / 2
+if grid_high - grid_low < width_min
+    grid_high := grid_middle + width_min_half
+    grid_low := grid_middle - width_min_half
+    grid_low
+if grid_high - grid_low > width_max
+    grid_high := grid_middle - width_max_half
+    grid_low := grid_middle + width_max_half
+    grid_low
+grid_middle := ta.sma(grid_middle, smooth)
+grid_high := ta.sma(grid_high, smooth)
+grid_low := ta.sma(grid_low, smooth)
+plot(grid_high, 'High', color.green, display = display.all)
+plot(grid_middle, 'Middle', color.silver, display = display.pane)
+plot(grid_low, 'Low', color.red, display = display.all)

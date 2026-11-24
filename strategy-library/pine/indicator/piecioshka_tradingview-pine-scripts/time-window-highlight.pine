@@ -1,0 +1,238 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Piotr Kowalski "piecioshka"
+// Docs (EN): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/time-window-highlight/time-window-highlight.md
+// Docs (PL): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/time-window-highlight/time-window-highlight.pl.md
+
+//@version=6
+// Highlights the same clock window on every day - a single shaded rectangle
+// spanning the full height of the pane, from the bar that first reaches the
+// start time to the last bar before the end time. Both times are given as
+// HH:MM and are computed in a selectable time zone (Warsaw by default),
+// because the chart's time axis usually shows the user's zone rather than the
+// exchange's. A window whose start is later than its end wraps over midnight
+// (e.g. 22:00-02:00), which covers overnight futures and the Asian session.
+// The color tells the direction, measured on a lower timeframe so that the
+// result does not change with the chart's own timeframe: green when the price
+// has risen between the start of the window and the latest point inside it,
+// red when it has fallen, and gray when it sits exactly at the opening
+// level or the lower-timeframe data does not reach that far back. The
+// rectangle is drawn as a box rather than bgcolor() so that it stays a single
+// object per day, can be recolored on every bar, and can be stretched as more
+// history loads. Works on intraday timeframes - on D and above every bar is a
+// whole day, so the indicator only shows a hint.
+indicator('Time Window Highlight', overlay = true, max_boxes_count = 500)
+
+GRP_WINDOW = 'Window'
+startTimeInput = input.string('17:30', 'Start time', group = GRP_WINDOW, tooltip = 'Start of the window as HH:MM, inclusive - the highlight begins on the first bar that has reached this time. A malformed value (wrong shape, hour outside 0-23, minute outside 0-59) disables the indicator.')
+endTimeInput = input.string('18:00', 'End time', group = GRP_WINDOW, tooltip = 'End of the window as HH:MM, exclusive - the highlight ends on the last bar before this time. An end earlier than the start wraps the window over midnight, e.g. 22:00-02:00.')
+
+GRP_GENERAL = 'General'
+tzMode = input.string('Warsaw', 'Time zone', options = ['Warsaw', 'London', 'New York', 'Exchange', 'UTC', 'Custom'], group = GRP_GENERAL, tooltip = 'The zone the start and end times are computed in. Set it to the same zone the chart time axis shows, otherwise the highlight lands shifted against the axis.')
+tzCustom = input.string('Europe/Warsaw', 'Custom time zone (IANA)', group = GRP_GENERAL, tooltip = 'Used only when "Custom" is selected. E.g. Europe/Berlin, America/Chicago, Asia/Tokyo.')
+
+GRP_APPEARANCE = 'Appearance'
+bgUpColor = input.color(color.new(#089981, 70), 'Up color', group = GRP_APPEARANCE, tooltip = 'Used when the price has risen inside the window - the latest price inside it is above the price at the start time.')
+bgDownColor = input.color(color.new(#F23645, 70), 'Down color', group = GRP_APPEARANCE, tooltip = 'Used when the price has fallen inside the window - the latest price inside it is below the price at the start time.')
+bgFlatColor = input.color(color.new(#787B86, 70), 'Unchanged color', group = GRP_APPEARANCE, tooltip = 'Used when the price has not moved inside the window, and when the direction cannot be established - the lower-timeframe data TradingView provides does not reach every bar of a long history, and older windows on large chart timeframes stay neutral.')
+showBorder = input.bool(false, 'Show border', group = GRP_APPEARANCE, tooltip = 'Draws the outline of the rectangle. The left and right edges mark the exact bars the window starts and ends on.')
+borderUpColor = input.color(color.new(#089981, 50), 'Border up color', group = GRP_APPEARANCE)
+borderDownColor = input.color(color.new(#F23645, 50), 'Border down color', group = GRP_APPEARANCE)
+borderFlatColor = input.color(color.new(#787B86, 50), 'Border unchanged color', group = GRP_APPEARANCE)
+borderStyleName = input.string('Solid', 'Border style', options = ['Solid', 'Dashed', 'Dotted'], group = GRP_APPEARANCE)
+borderWidth = input.int(1, 'Border width', minval = 1, maxval = 4, group = GRP_APPEARANCE)
+
+tz = switch tzMode
+    'Warsaw' => 'Europe/Warsaw'
+    'London' => 'Europe/London'
+    'New York' => 'America/New_York'
+    'Exchange' => syminfo.timezone
+    'UTC' => 'UTC'
+    => tzCustom
+
+borderStyle = switch borderStyleName
+    'Solid' => line.style_solid
+    'Dotted' => line.style_dotted
+    => line.style_dashed
+
+// "09:30" -> 570 minutes from midnight; returns na for a malformed value
+minutesOf(string hhmm) =>
+    parts = str.split(str.replace_all(hhmm, ' ', ''), ':')
+    int result = na
+    if array.size(parts) == 2
+        h = str.tonumber(array.get(parts, 0))
+        m = str.tonumber(array.get(parts, 1))
+        if not na(h) and not na(m) and h >= 0 and h <= 23 and m >= 0 and m <= 59
+            result := int(h) * 60 + int(m)
+    result
+
+startMinutes = minutesOf(startTimeInput)
+endMinutes = minutesOf(endTimeInput)
+
+nowMinutes = hour(time, tz) * 60 + minute(time, tz)
+
+// The start is inclusive and the end exclusive, so a bar stamped exactly at
+// the end time already falls outside. A start later than the end wraps over
+// midnight, and then the window is the union of the two ends of the day
+// instead of the span between them. Equal times would mean a zero-length
+// window, which is never inside.
+inWindow = na(startMinutes) or na(endMinutes) or startMinutes == endMinutes ? false : startMinutes < endMinutes ? nowMinutes >= startMinutes and nowMinutes < endMinutes : nowMinutes >= startMinutes or nowMinutes < endMinutes
+
+// The direction is measured on a lower timeframe rather than on the chart's
+// own bars, because the chart's bars do not have to line up with the window.
+// On a 7-minute chart no bar opens exactly at 09:30, and on a 1-hour chart a
+// single bar can swallow the whole window - taking the open of "the first bar
+// inside the window" would then measure a different stretch of time on every
+// timeframe. Measured on UKOIL for a 09:30-10:30 window that moved +0.95: the
+// chart-bar method returned +0.94 on 7m and +0.19 on 1h, while the lower
+// timeframe reference stays +0.95 everywhere.
+//
+// The source timeframe is picked rather than fixed at one minute, because
+// request.security_lower_tf stops after 100,000 lower-timeframe bars. Asking
+// for minutes on a 1-hour chart spends 60 of them per bar and runs out after
+// 1,740 bars - measured on UKOIL, 19,428 of 21,168 bars came back with empty
+// arrays, which left almost the whole history without a direction. A coarser
+// source stretches the same budget: on a 1-hour chart a 30-minute source
+// reaches ~50,000 bars instead of 1,740.
+//
+// The step must divide both ends of the window, otherwise its bars stop
+// landing on the window's edges and the original timeframe dependence comes
+// back. A window on a plain half hour keeps a coarse step available; one on
+// an odd minute (09:33) leaves only '1'.
+LTF_LIMIT = 100000
+// Enough to cover any realistic history; beyond this the step cannot grow
+// without breaking the window's edges anyway.
+LTF_TARGET_BARS = 20000
+chartMinutes = timeframe.in_seconds() / 60
+
+// Candidates are limited to divisors of an hour, so they always tile the clock
+// the same way on every day.
+//
+// Divisibility is the hard requirement: a step that misses an edge of the
+// window reintroduces the timeframe dependence this whole mechanism exists to
+// remove. A step coarser than the chart is not a lower timeframe at all.
+stepAllowed(int step) =>
+    step < chartMinutes and (na(startMinutes) or startMinutes % step == 0) and (na(endMinutes) or endMinutes % step == 0)
+
+// Coverage is the soft one - it decides which of the allowed steps to take.
+stepCovers(int step) =>
+    LTF_LIMIT / math.max(1, math.floor(chartMinutes / step)) >= LTF_TARGET_BARS
+
+stepFits(int step) =>
+    stepAllowed(step) and stepCovers(step)
+
+// Coarsest first, because the finest step that divides the window is '1' on
+// every chart - exactly the case that runs out of budget. If no step reaches
+// the coverage target (very large chart timeframes), fall back to the coarsest
+// allowed one anyway: it still divides the window and still stretches the
+// budget further than '1' would.
+ltfStep = stepFits(60) ? 60 : stepFits(30) ? 30 : stepFits(15) ? 15 : stepFits(10) ? 10 : stepFits(5) ? 5 : stepFits(3) ? 3 : stepFits(2) ? 2 : stepAllowed(60) ? 60 : stepAllowed(30) ? 30 : stepAllowed(15) ? 15 : stepAllowed(10) ? 10 : stepAllowed(5) ? 5 : stepAllowed(3) ? 3 : stepAllowed(2) ? 2 : 1
+ltfSpec = str.tostring(ltfStep)
+
+ltfTime = request.security_lower_tf(syminfo.tickerid, ltfSpec, time)
+ltfOpen = request.security_lower_tf(syminfo.tickerid, ltfSpec, open)
+ltfClose = request.security_lower_tf(syminfo.tickerid, ltfSpec, close)
+
+minutesOfTime(int t) =>
+    hour(t, tz) * 60 + minute(t, tz)
+
+// Whether a minute belongs to the window, using the same inclusive-start,
+// exclusive-end rule (and the same midnight wrap) as the highlight itself.
+minuteInWindow(int m) =>
+    na(startMinutes) or na(endMinutes) or startMinutes == endMinutes ? false : startMinutes < endMinutes ? m >= startMinutes and m < endMinutes : m >= startMinutes or m < endMinutes
+
+// The reference is the open of the window's opening minute and the comparison
+// value is the close of the latest minute seen so far inside it. Both are kept
+// across bars, because a chart bar only carries the minutes it contains - the
+// opening minute and the current one rarely sit in the same bar.
+var float windowOpen = na
+var float windowLast = na
+if array.size(ltfTime) > 0
+    for i = 0 to array.size(ltfTime) - 1
+        m = minutesOfTime(array.get(ltfTime, i))
+        // The opening minute both sets the reference and discards the previous
+        // window's value, so a bar holding the end of one window and the start
+        // of the next cannot carry a stale reference over.
+        if m == startMinutes
+            windowOpen := array.get(ltfOpen, i)
+            windowLast := array.get(ltfClose, i)
+        else if minuteInWindow(m)
+            windowLast := array.get(ltfClose, i)
+
+// Vertical bounds of the highlight. TradingView silently skips boxes whose
+// top/bottom lie extremely far from the price scale (measured on an instrument
+// near 85: bounds of +-1e8 still draw, +-1e9 do not), so absurd constants like
+// 1e17 produce boxes that exist but never render. Instead the bounds follow
+// the price range of the loaded data - 100x that range above and below covers
+// the full height of the pane at any realistic zoom while staying far inside
+// the renderer's limits.
+BG_PAD = 100.0
+var float dataHigh = na
+var float dataLow = na
+if not na(high) and not na(low)
+    dataHigh := na(dataHigh) ? high : math.max(dataHigh, high)
+    dataLow := na(dataLow) ? low : math.min(dataLow, low)
+bgPad = math.max(dataHigh - dataLow, syminfo.mintick) * BG_PAD
+bgTop = dataHigh + bgPad
+bgBottom = dataLow - bgPad
+
+// One box per window instead of bgcolor(), which paints a single bar at a
+// time and cannot be revisited later - a box spans the whole window and its
+// bounds can be corrected as more history loads.
+//
+// The horizontal bounds are timestamps (xloc.bar_time), not bar indices,
+// because a window does not have to contain more than one bar. A 09:30-10:30
+// window holds two bars on a 30-minute chart but only one on a 1-hour chart,
+// and a box from that bar's index to itself has zero width - it exists in the
+// object tree and never appears on screen, which is exactly what happened on
+// 1h before. Timestamps give the box the window's real duration, so it stays
+// an hour wide on every timeframe.
+MS_PER_MINUTE = 60000
+var box currentBox = na
+
+// Midnight of the current bar's day, in the selected time zone - the anchor
+// the window's own timestamps are measured from.
+dayStart = timestamp(tz, year(time, tz), month(time, tz), dayofmonth(time, tz), 0, 0)
+// A window that wraps past midnight belongs to the day it started on, so a bar
+// sitting in its tail (before the end time) anchors to the previous midnight.
+windowDayStart = not na(startMinutes) and not na(endMinutes) and startMinutes > endMinutes and nowMinutes < endMinutes ? dayStart - 24 * 60 * MS_PER_MINUTE : dayStart
+windowStartTime = windowDayStart + startMinutes * MS_PER_MINUTE
+// The end is exclusive, so the box reaches the end time without covering it.
+windowEndTime = windowStartTime + (startMinutes < endMinutes ? endMinutes - startMinutes : 24 * 60 - startMinutes + endMinutes) * MS_PER_MINUTE
+
+// Three states, not two: a value exactly at the opening level is neither a
+// rise nor a fall and gets its own neutral color instead of being folded into
+// one of them. An unknown direction (no 1-minute data yet) is neutral too.
+directionColor(float reference, float value, color up, color down, color flat) =>
+    na(reference) or na(value) ? flat : value > reference ? up : value < reference ? down : flat
+
+if timeframe.isintraday
+    if inWindow
+        if na(currentBox)
+            currentBox := box.new(windowStartTime, bgTop, windowEndTime, bgBottom, xloc = xloc.bar_time, border_color = color.new(color.black, 100), border_width = showBorder ? borderWidth : 1, border_style = borderStyle, bgcolor = bgFlatColor)
+        else
+            box.set_right(currentBox, windowEndTime)
+        // The direction is re-evaluated on every bar of the window, so an
+        // ongoing window changes color as the price crosses its opening level;
+        // a closed one keeps the state of its last bar.
+        box.set_bgcolor(currentBox, directionColor(windowOpen, windowLast, bgUpColor, bgDownColor, bgFlatColor))
+        box.set_border_color(currentBox, showBorder ? directionColor(windowOpen, windowLast, borderUpColor, borderDownColor, borderFlatColor) : color.new(color.black, 100))
+    else
+        // Leaving the window closes the box for good; the next entry starts a
+        // new one.
+        currentBox := na
+        windowOpen := na
+        windowLast := na
+
+    // Boxes of earlier windows were created while less data was loaded, so
+    // their bounds are narrower - on the last bar bring every box to the final
+    // bounds. Runs only when the bounds actually change.
+    var float sweptTop = na
+    if barstate.islast and (na(sweptTop) or bgTop != sweptTop)
+        sweptTop := bgTop
+        for b in box.all
+            box.set_top(b, bgTop)
+            box.set_bottom(b, bgBottom)
+else
+    if barstate.islast
+        var table hint = table.new(position.top_right, 1, 1)
+        table.cell(hint, 0, 0, 'Time Window Highlight: the indicator works on intraday timeframes', text_color = color.gray, text_size = size.small)

@@ -1,0 +1,63 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Piotr Kowalski "piecioshka"
+// Docs (EN): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/3x-ma/3x-ma.md
+// Docs (PL): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/3x-ma/3x-ma.pl.md
+
+//@version=6
+indicator('3x MA = Moving Average', overlay = true)
+
+aLen = input(4, 'Length', group='Short')
+aType = input.string(title='Type', options=['SMA', 'EMA', 'WMA', 'VWMA', 'RMA'], group='Short', defval='SMA')
+aColor = input.color(color.rgb(237, 197, 57), 'Color', group='Short')
+aSeries = switch aType
+    'SMA' => ta.sma(close, aLen)
+    'EMA' => ta.ema(close, aLen)
+    'WMA' => ta.wma(close, aLen)
+    'VWMA' => ta.vwma(close, aLen)
+    'RMA' => ta.rma(close, aLen)
+    => na
+
+bLen = input(9, 'Length', group='Medium')
+bType = input.string(title='Type', options=['SMA', 'EMA', 'WMA', 'VWMA', 'RMA'], group='Medium', defval='SMA')
+bColor = input.color(color.rgb(141, 68, 57), 'Color', group='Medium')
+bSeries = switch bType
+    'SMA' => ta.sma(close, bLen)
+    'EMA' => ta.ema(close, bLen)
+    'WMA' => ta.wma(close, bLen)
+    'VWMA' => ta.vwma(close, bLen)
+    'RMA' => ta.rma(close, bLen)
+    => na
+
+cLen = input(18, 'Length', group='Long')
+cType = input.string(title='Type', options=['SMA', 'EMA', 'WMA', 'VWMA', 'RMA'], group='Long', defval='SMA')
+cColor = input.color(color.rgb(194, 59, 47), 'Color', group='Long')
+cSeries = switch cType
+    'SMA' => ta.sma(close, cLen)
+    'EMA' => ta.ema(close, cLen)
+    'WMA' => ta.wma(close, cLen)
+    'VWMA' => ta.vwma(close, cLen)
+    'RMA' => ta.rma(close, cLen)
+    => na
+
+showLabels = input.bool(true, 'Show labels (length and type)', group='Labels')
+
+plot(aSeries, 'Short', color=color.new(aColor, 0), linewidth=2, force_overlay=true)
+plot(bSeries, 'Medium', color=color.new(bColor, 0), linewidth=2, force_overlay=true)
+plot(cSeries, 'Long', color=color.new(cColor, 0), linewidth=2, force_overlay=true)
+
+updateLabel(label lbl, float y, string txt, color col) =>
+    label result = lbl
+    if na(result)
+        result := label.new(bar_index, y, txt, style=label.style_label_left, color=color.new(color.black, 100), textcolor=col, force_overlay=true)
+    label.set_xy(result, bar_index, y)
+    label.set_text(result, txt)
+    result
+
+var label aLabel = na
+var label bLabel = na
+var label cLabel = na
+
+if showLabels and barstate.islast
+    aLabel := updateLabel(aLabel, aSeries, str.tostring(aLen) + ' ' + aType, aColor)
+    bLabel := updateLabel(bLabel, bSeries, str.tostring(bLen) + ' ' + bType, bColor)
+    cLabel := updateLabel(cLabel, cSeries, str.tostring(cLen) + ' ' + cType, cColor)

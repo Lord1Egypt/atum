@@ -1,0 +1,235 @@
+//@version=6
+// Bullseye Quantitative Engine ("Poindexter") - live-chart port of Python detection logic.
+indicator("Bullseye FVG & Opening Gaps", shorttitle = "1stFVG/OG", overlay = true,
+     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// inputs
+GT = "Session (New York time, HH:MM)"
+activationS = input.string("08:30", "Detection starts",            group = GT)
+cashOpenS   = input.string("09:30", "Cash open",                   group = GT)
+anchorS     = input.string("09:31", "Opening-bell anchor",         group = GT)
+endS        = input.string("15:45", "Detection ends",              group = GT)
+flattenS    = input.string("15:00", "Friday hard close",           group = GT)
+fridayCut   = input.bool(true, "Stop detecting after Friday hard close", group = GT)
+
+GR = "Rules & Lifespans"
+requireDisp  = input.bool(true,  "Require displacement candle (c2 closes in gap direction)", group = GR)
+showAll      = input.bool(false, "Draw every other FVG (not just first presented)",          group = GR)
+showOG       = input.bool(true,  "Detect NDOG / NWOG",                                       group = GR)
+fvgLifespan  = input.int(3,      "FVG Lifespan (Days)",                  minval = 1,          group = GR)
+ndogLifespan = input.int(5,      "NDOG Lifespan (Days / 1 Wk)",          minval = 1,          group = GR)
+nwogLifespan = input.int(25,     "NWOG Lifespan (Days / 5 Wks)",         minval = 1,          group = GR)
+
+GV = "Style"
+bullCol   = input.color(color.new(#1b7a63, 0), "Bullish FVG",           group = GV)
+bearCol   = input.color(color.new(#a83b35, 0), "Bearish FVG",           group = GV)
+invCol    = input.color(color.new(#9e7c27, 0), "Inverted Color",        group = GV)
+ndogCol   = input.color(color.new(#2563eb, 0), "NDOG Color",            group = GV)
+nwogCol   = input.color(color.new(#9ca3af, 0), "NWOG Color",            group = GV)
+showCE    = input.bool(true,  "Show CE (50%) line",                     group = GV)
+showLabel = input.bool(true,  "Show labels on right edge",              group = GV)
+showWin   = input.bool(false, "Shade the detection window",             group = GV)
+
+// helpers
+toMin(string s) =>
+    parts = str.split(s, ":")
+    if array.size(parts) != 2
+        runtime.error("Times must be HH:MM, got '" + s + "'")
+    int(str.tonumber(array.get(parts, 0))) * 60 + int(str.tonumber(array.get(parts, 1)))
+
+type Zone
+    float  top
+    float  bottom
+    int    kind      // 1 = Bullish FVG, -1 = Bearish FVG, 2 = NDOG, 3 = NWOG
+    box    bx
+    line   topLine
+    line   botLine
+    line   ce
+    label  topLbl
+    label  botLbl
+    bool   isInverted
+    string txt       
+    int    birthDay  
+    int    maxDays   
+
+//  state
+tz = "America/New_York"
+
+activationMin = toMin(activationS)
+cashOpenMin   = toMin(cashOpenS)
+anchorMin     = toMin(anchorS)
+endMin        = toMin(endS)
+flattenMin    = toMin(flattenS)
+
+var array<Zone> activeZones = array.new<Zone>()
+var bool firstDone  = false
+var int dayCounter  = 0
+var int lastDayKey  = 0
+
+// 1m tracking state across bars
+var float m1_h2 = na, var float m1_l2 = na, var int m1_t2 = na, var float m1_o2 = na, var float m1_c2 = na
+var float m1_h1 = na, var float m1_l1 = na, var int m1_t1 = na, var float m1_o1 = na, var float m1_c1 = na
+
+// 1m security fetch
+is1m = timeframe.isintraday and timeframe.multiplier == 1
+
+var int[]   t_1m = na
+var float[] o_1m = na
+var float[] h_1m = na
+var float[] l_1m = na
+var float[] c_1m = na
+
+if is1m
+    t_1m := array.new<int>(1, time)
+    o_1m := array.new<float>(1, open)
+    h_1m := array.new<float>(1, high)
+    l_1m := array.new<float>(1, low)
+    c_1m := array.new<float>(1, close)
+else
+    t_1m := request.security_lower_tf(syminfo.tickerid, "1", time)
+    o_1m := request.security_lower_tf(syminfo.tickerid, "1", open)
+    h_1m := request.security_lower_tf(syminfo.tickerid, "1", high)
+    l_1m := request.security_lower_tf(syminfo.tickerid, "1", low)
+    c_1m := request.security_lower_tf(syminfo.tickerid, "1", close)
+
+// engine execution
+if barstate.isconfirmed and not na(t_1m) and array.size(t_1m) > 0
+    for idx = 0 to array.size(t_1m) - 1
+        cur_t = array.get(t_1m, idx)
+        cur_o = array.get(o_1m, idx)
+        cur_h = array.get(h_1m, idx)
+        cur_l = array.get(l_1m, idx)
+        cur_c = array.get(c_1m, idx)
+
+        if not na(m1_h2) and not na(m1_h1) and not na(cur_h)
+            dayKey = year(cur_t, tz) * 10000 + month(cur_t, tz) * 100 + dayofmonth(cur_t, tz)
+            
+            // New Day Transition Logic
+            if dayKey != lastDayKey
+                lastDayKey := dayKey
+                dayCounter += 1
+                firstDone  := false
+
+                // Expire zones past lifespan
+                if array.size(activeZones) > 0
+                    for i = array.size(activeZones) - 1 to 0
+                        z = array.get(activeZones, i)
+                        if (dayCounter - z.birthDay) >= z.maxDays
+                            if not na(z.bx)
+                                box.delete(z.bx)
+                            if not na(z.topLine)
+                                line.delete(z.topLine)
+                            if not na(z.botLine)
+                                line.delete(z.botLine)
+                            if not na(z.ce)
+                                line.delete(z.ce)
+                            if not na(z.topLbl)
+                                label.delete(z.topLbl)
+                            if not na(z.botLbl)
+                                label.delete(z.botLbl)
+                            array.remove(activeZones, i)
+
+            // 1. NDOG / NWOG Detection (17:00-18:00 NY halt or weekend gap)
+            nyHour        = hour(cur_t, tz)
+            nyHourPrev    = hour(m1_t1, tz)
+            isSessionOpen = (nyHour == 18 and nyHourPrev != 18) or (cur_t - m1_t1 >= 1800000)
+
+            if showOG and isSessionOpen
+                nyDay  = dayofweek(cur_t, tz)
+                isNWOG = (nyDay == dayofweek.sunday) or (nyDay == dayofweek.monday and nyHour < 9) or (dayofweek(m1_t1, tz) == dayofweek.friday)
+                ogTop  = math.max(m1_c1, cur_o)
+                ogBot  = math.min(m1_c1, cur_o)
+                
+                if ogTop > ogBot
+                    ogCE     = (ogTop + ogBot) / 2
+                    dateStr  = str.format("{0,date,dd MMM}", cur_t)
+                    prefix   = isNWOG ? "NWOG" : "NDOG"
+                    ogKind   = isNWOG ? 3 : 2
+                    col      = isNWOG ? nwogCol : ndogCol
+                    lifespan = isNWOG ? nwogLifespan : ndogLifespan
+                    
+                    tLine = line.new(x1 = cur_t - 60000, y1 = ogTop, x2 = time, y2 = ogTop, xloc = xloc.bar_time, color = color.new(col, 30), width = 1, style = line.style_solid)
+                    bLine = line.new(x1 = cur_t - 60000, y1 = ogBot, x2 = time, y2 = ogBot, xloc = xloc.bar_time, color = color.new(col, 30), width = 1, style = line.style_solid)
+                    
+                    tLbl  = showLabel ? label.new(x = time, y = ogTop, text = prefix + " High " + dateStr, xloc = xloc.bar_time, color = color.new(color.black, 100), textcolor = col, style = label.style_label_left, size = size.small) : na
+                    bLbl  = showLabel ? label.new(x = time, y = ogBot, text = prefix + " Low " + dateStr, xloc = xloc.bar_time, color = color.new(color.black, 100), textcolor = col, style = label.style_label_left, size = size.small) : na
+                    
+                    cLine = showCE ? line.new(x1 = cur_t - 60000, y1 = ogCE, x2 = time, y2 = ogCE, xloc = xloc.bar_time, color = color.new(col, 70), style = line.style_dotted) : na
+                    
+                    array.push(activeZones, Zone.new(ogTop, ogBot, ogKind, na, tLine, bLine, cLine, tLbl, bLbl, false, prefix + " " + dateStr, dayCounter, lifespan))
+
+            // 2. FVG Detection (Strictly 1m calculation)
+            mod        = hour(cur_t, tz) * 60 + minute(cur_t, tz)
+            mod1st     = hour(m1_t2, tz) * 60 + minute(m1_t2, tz)
+            isFri      = dayofweek(cur_t, tz) == dayofweek.friday
+            active     = mod >= activationMin and mod < endMin and not (fridayCut and isFri and mod >= flattenMin)
+            contiguous = (cur_t - m1_t1 == 60000) and (m1_t1 - m1_t2 == 60000)
+            inBell     = mod >= cashOpenMin and mod <= anchorMin
+
+            dispUp   = m1_c1 > m1_o1 or not requireDisp
+            dispDown = m1_c1 < m1_o1 or not requireDisp
+            bull     = contiguous and m1_h2 < cur_l and dispUp
+            bear     = contiguous and m1_l2 > cur_h and dispDown
+
+            if active and (bull or bear) and not inBell
+                isFirst = not firstDone and mod > anchorMin and mod1st > anchorMin
+                if isFirst
+                    firstDone := true
+                if isFirst or showAll
+                    kind   = bull ? 1 : -1
+                    top    = bull ? cur_l : m1_l2
+                    bottom = bull ? m1_h2 : cur_h
+                    
+                    if top > bottom
+                        ce      = (top + bottom) / 2
+                        col     = bull ? bullCol : bearCol
+                        dateStr = str.format("{0,date,dd MMM}", cur_t)
+                        txt     = (isFirst ? "1st " : "") + "P.FVG " + dateStr
+                        
+                        bx = box.new(left = m1_t2, top = top, right = time, bottom = bottom, xloc = xloc.bar_time,
+                             border_color = color.new(col, 40), border_width = 1, border_style = line.style_solid,
+                             bgcolor = color.new(col, 96),
+                             text = showLabel ? txt : "",
+                             text_halign = text.align_right,
+                             text_valign = text.align_center,
+                             text_color = color.new(color.white, 20),
+                             text_size = size.small)
+                             
+                        cLine = showCE ? line.new(x1 = m1_t2, y1 = ce, x2 = time, y2 = ce, xloc = xloc.bar_time,
+                             color = color.new(col, 65), style = line.style_dotted) : na
+                             
+                        array.push(activeZones, Zone.new(top, bottom, kind, bx, na, na, cLine, na, na, false, txt, dayCounter, fvgLifespan))
+
+        // Shift 1m history
+        m1_h2 := m1_h1, m1_l2 := m1_l1, m1_t2 := m1_t1, m1_o2 := m1_o1, m1_c2 := m1_c1
+        m1_h1 := cur_h, m1_l1 := cur_l, m1_t1 := cur_t, m1_o1 := cur_o, m1_c1 := cur_c
+
+// dynamic tracking
+if barstate.isconfirmed and array.size(activeZones) > 0
+    for i = 0 to array.size(activeZones) - 1
+        z = array.get(activeZones, i)
+        
+        if not na(z.bx)
+            box.set_right(z.bx, time)
+        if not na(z.topLine)
+            line.set_x2(z.topLine, time)
+        if not na(z.botLine)
+            line.set_x2(z.botLine, time)
+        if not na(z.ce)
+            line.set_x2(z.ce, time)
+        if not na(z.topLbl)
+            label.set_x(z.topLbl, time)
+        if not na(z.botLbl)
+            label.set_x(z.botLbl, time)
+            
+        // Check inversion for FVGs
+        if not z.isInverted and (z.kind == 1 or z.kind == -1)
+            inverted = z.kind == 1 ? close < z.bottom : close > z.top
+            if inverted
+                z.isInverted := true
+                box.set_border_color(z.bx, color.new(invCol, 40))
+                box.set_bgcolor(z.bx, color.new(invCol, 96))
+                if not na(z.ce)
+                    line.set_color(z.ce, color.new(invCol, 65))
+
+bgcolor(showWin and (hour(time, tz) * 60 + minute(time, tz) >= activationMin and hour(time, tz) * 60 + minute(time, tz) < endMin) ? color.new(color.blue, 97) : na)

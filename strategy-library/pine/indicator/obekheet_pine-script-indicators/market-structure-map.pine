@@ -1,0 +1,188 @@
+//@version=6
+// Taught to Trade - Market Structure Map
+//
+// Confirmed swing highs and lows, labelled HH / LH / HL / LL, with the structure state they imply
+// (higher highs and higher lows, lower highs and lower lows, or mixed) - plus the one number most
+// structure tools never show: how often a close beyond the last swing level was still beyond it
+// a fixed number of bars later, compared against the same count for plain rolling-range breaks
+// on the same chart.
+//
+// If swing-level breaks follow through about as often as breaks of an arbitrary rolling high/low,
+// the swing labels are describing price's general drift, not anything special about structure.
+// That comparison is the point of the tool.
+//
+// Swings are only known after the confirmation lag. Nothing here predicts, ranks or scores
+// anything, and no buy/sell signal is sent. Alerts are conditions you arm yourself.
+//
+// All ta.* calls are at top level. Functions and conditional blocks touch only arrays and var scalars.
+indicator("Taught to Trade - Market Structure Map", shorttitle = "TT STRUCTURE",
+     overlay = true, max_labels_count = 300, max_bars_back = 5000)
+
+// ─────────────────────────────── Inputs ───────────────────────────────
+grpS = "Swings"
+swLen = input.int(5, "Swing lookback (bars each side)", minval = 2, maxval = 50, group = grpS,
+     tooltip = "A swing is only confirmed this many bars after it forms. Labels are drawn back at the swing bar, but nothing on the chart knew about the swing until the confirmation bar.")
+
+grpF = "Follow-through count"
+fwdN   = input.int(10, "Bars after the break", minval = 1, maxval = 200, group = grpF,
+     tooltip = "A break counts as 'still beyond' if the close this many bars later is still on the far side of the broken level. This is a free parameter: change it and the counts change.")
+showCtl = input.bool(true, "Compare against rolling-range breaks", group = grpF,
+     tooltip = "Applies the same count to closes beyond the highest high / lowest low of the previous (2 x lookback + 1) bars - the same window a swing uses, without the swing.")
+
+grpD = "Draw"
+showLbl  = input.bool(true, "Swing labels", group = grpD)
+showLvl  = input.bool(true, "Last swing high / low lines", group = grpD)
+showBg   = input.bool(true, "Shade structure state", group = grpD)
+showTbl  = input.bool(true, "Readout table", group = grpD)
+tblPosIn = input.string("Bottom left", "Table position", group = grpD,
+     options = ["Bottom left", "Bottom right", "Top left", "Top right", "Middle right"],
+     tooltip = "Bottom left sits over the oldest bars, away from the price scale and the badges TradingView draws in the bottom-right corner.")
+colUp = input.color(color.new(#2F6FED, 0), "Higher highs + higher lows", group = grpD, inline = "c1")
+colDn = input.color(color.new(#8A94A6, 0), "Lower highs + lower lows",   group = grpD, inline = "c1")
+
+// ──────────────────────── Series (top level only) ────────────────────────
+ph = ta.pivothigh(swLen, swLen)
+pl = ta.pivotlow(swLen, swLen)
+ctlLen = 2 * swLen + 1
+ctlHi  = ta.highest(high, ctlLen)[1]
+ctlLo  = ta.lowest(low, ctlLen)[1]
+ctlUp  = ta.crossover(close, ctlHi)
+ctlDn  = ta.crossunder(close, ctlLo)
+
+// ─────────────────────────────── Swing state ───────────────────────────────
+var float lastH  = na
+var float prevH  = na
+var float lastL  = na
+var float prevL  = na
+var string tagH  = ""
+var string tagL  = ""
+var bool  hBroken = false
+var bool  lBroken = false
+
+if not na(ph)
+    prevH := lastH
+    lastH := ph
+    tagH := na(prevH) ? "H" : ph > prevH ? "HH" : "LH"
+    hBroken := close > lastH
+    if showLbl
+        label.new(bar_index - swLen, ph, tagH, style = label.style_label_down, size = size.tiny,
+             color = color.new(color.white, 100), textcolor = tagH == "HH" ? colUp : colDn)
+if not na(pl)
+    prevL := lastL
+    lastL := pl
+    tagL := na(prevL) ? "L" : pl > prevL ? "HL" : "LL"
+    lBroken := close < lastL
+    if showLbl
+        label.new(bar_index - swLen, pl, tagL, style = label.style_label_up, size = size.tiny,
+             color = color.new(color.white, 100), textcolor = tagL == "HL" ? colUp : colDn)
+
+stateUp = tagH == "HH" and tagL == "HL"
+stateDn = tagH == "LH" and tagL == "LL"
+stateTxt = stateUp ? "HH + HL" : stateDn ? "LH + LL" : "Mixed"
+
+// ─────────────── Breaks of the last confirmed swing level ───────────────
+bool brkUp = false
+bool brkDn = false
+if not na(lastH) and not hBroken and close > lastH
+    brkUp := true
+    hBroken := true
+if not na(lastL) and not lBroken and close < lastL
+    brkDn := true
+    lBroken := true
+
+// ─────────────── Follow-through bookkeeping (FIFO, resolved at exactly N bars) ───────────────
+var array<int>   sBar = array.new<int>()
+var array<float> sLvl = array.new<float>()
+var array<int>   sDir = array.new<int>()
+var array<int>   cBar = array.new<int>()
+var array<float> cLvl = array.new<float>()
+var array<int>   cDir = array.new<int>()
+
+var int sHeld = 0
+var int sTot  = 0
+var int cHeld = 0
+var int cTot  = 0
+var int nUp   = 0
+var int nDn   = 0
+
+f_resolve(array<int> bs, array<float> ls, array<int> ds, int n) =>
+    int h = 0
+    int tn = 0
+    while array.size(bs) > 0 and bar_index - array.get(bs, 0) >= n
+        int d = array.get(ds, 0)
+        float lv = array.get(ls, 0)
+        tn += 1
+        if (d == 1 and close > lv) or (d == -1 and close < lv)
+            h += 1
+        array.shift(bs)
+        array.shift(ls)
+        array.shift(ds)
+    [h, tn]
+
+[h1, t1] = f_resolve(sBar, sLvl, sDir, fwdN)
+[h2, t2] = f_resolve(cBar, cLvl, cDir, fwdN)
+sHeld += h1
+sTot  += t1
+cHeld += h2
+cTot  += t2
+
+if brkUp
+    nUp += 1
+    array.push(sBar, bar_index)
+    array.push(sLvl, lastH)
+    array.push(sDir, 1)
+if brkDn
+    nDn += 1
+    array.push(sBar, bar_index)
+    array.push(sLvl, lastL)
+    array.push(sDir, -1)
+if showCtl and ctlUp
+    array.push(cBar, bar_index)
+    array.push(cLvl, ctlHi)
+    array.push(cDir, 1)
+if showCtl and ctlDn
+    array.push(cBar, bar_index)
+    array.push(cLvl, ctlLo)
+    array.push(cDir, -1)
+
+// ─────────────────────────────── Drawing ───────────────────────────────
+plot(showLvl ? lastH : na, "Last swing high", color = color.new(colDn, 20), style = plot.style_stepline, linewidth = 1)
+plot(showLvl ? lastL : na, "Last swing low",  color = color.new(colUp, 20), style = plot.style_stepline, linewidth = 1)
+bgcolor(showBg and stateUp ? color.new(colUp, 92) : showBg and stateDn ? color.new(colDn, 90) : na, title = "Structure state")
+
+// ─────────────────────────────── Table ───────────────────────────────
+bgCol  = color.new(#0E1526, 10)
+txtCol = color.new(#E6EAF2, 0)
+hdrCol = color.new(#2F6FED, 0)
+
+tblPos = tblPosIn == "Bottom right" ? position.bottom_right : tblPosIn == "Top left" ? position.top_left :
+     tblPosIn == "Top right" ? position.top_right : tblPosIn == "Middle right" ? position.middle_right : position.bottom_left
+
+var table t = table.new(tblPos, 2, 8, border_width = 1, border_color = color.new(#2F6FED, 70))
+
+f_row(int r, string k, string v) =>
+    table.cell(t, 0, r, k, text_color = txtCol, text_size = size.small, text_halign = text.align_left,  bgcolor = bgCol)
+    table.cell(t, 1, r, v, text_color = txtCol, text_size = size.small, text_halign = text.align_right, bgcolor = bgCol)
+
+f_frac(int a, int b) =>
+    b > 0 ? str.tostring(a) + " of " + str.tostring(b) : "-"
+
+if barstate.islast and showTbl
+    float sR = sTot > 0 ? float(sHeld) / sTot : na
+    float cR = cTot > 0 ? float(cHeld) / cTot : na
+    string ratioTxt = na(sR) or na(cR) or cR <= 0 ? "-" : str.tostring(sR / cR, "0.00") + "x"
+    table.cell(t, 0, 0, "MARKET STRUCTURE", text_color = color.white, text_size = size.small, bgcolor = hdrCol)
+    table.cell(t, 1, 0, stateTxt, text_color = color.white, text_size = size.small, bgcolor = hdrCol)
+    f_row(1, "Swing lookback",        str.tostring(swLen) + " bars each side")
+    f_row(2, "Last swings",           (tagH == "" ? "-" : tagH) + " / " + (tagL == "" ? "-" : tagL))
+    f_row(3, "Swing breaks up / down", str.tostring(nUp) + " / " + str.tostring(nDn))
+    f_row(4, "Beyond after " + str.tostring(fwdN) + " bars", f_frac(sHeld, sTot))
+    f_row(5, "Rolling-range breaks",  showCtl ? f_frac(cHeld, cTot) : "off")
+    f_row(6, "Swing vs rolling",      showCtl ? ratioTxt : "-")
+    f_row(7, "Bars counted",          str.tostring(bar_index + 1))
+
+// ─────────────── Alerts (conditions you arm yourself) ───────────────
+alertcondition(brkUp, title = "Close above the last confirmed swing high",
+     message = "Market Structure Map: close above the last confirmed swing high.")
+alertcondition(brkDn, title = "Close below the last confirmed swing low",
+     message = "Market Structure Map: close below the last confirmed swing low.")

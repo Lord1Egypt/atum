@@ -1,0 +1,184 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Piotr Kowalski "piecioshka"
+// Docs (EN): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators-premium/volume/volume-delta-table/volume-delta-table.md
+// Docs (PL): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators-premium/volume/volume-delta-table/volume-delta-table.pl.md
+
+//@version=6
+indicator('Volume Delta Table', overlay=true)
+
+// Standalone volume delta status table: volume / buy / sell / delta (+ %) / CVD.
+// The buy/sell split comes from request.footprint (real aggressor-side volume).
+// Requires Premium/Ultimate; no footprint data (e.g. some crypto) → "-".
+
+cBuy  = color.rgb(38, 166, 154)  // buy dominance (positive delta) - default candle green #26A69A
+cSell = color.rgb(239, 83, 80)   // sell dominance (negative delta) - default candle red #EF5350
+
+// A single table row (label + value + colors + optional background). Separators are a row with sepText in both columns.
+type Row
+    string label
+    string value
+    color  labColor
+    color  valColor
+    color  bg = na
+
+gTable = 'Table'
+tablePos     = input.string('Top right', 'Position', options=['Top right', 'Middle right', 'Bottom right', 'Top left', 'Middle left', 'Bottom left'], group=gTable)
+tableMarginX = input.int(0, 'Horizontal margin (%)', minval=0, maxval=20, group=gTable, tooltip='Offset of the table from the left/right edge (% of width).')
+tableMarginY = input.int(0, 'Vertical margin (%)', minval=0, maxval=20, group=gTable, tooltip='Offset of the table from the top/bottom (% of height). Irrelevant for "Middle".')
+fontSize     = input.string('Small', 'Text size', options=['Tiny', 'Small', 'Normal', 'Large'], group=gTable)
+
+gRows = 'Table rows'
+showSessionStart = input.bool(false, 'Session start', group=gRows, tooltip='Show the date and time when the current session started (consistent with the CVD reset).')
+showBarCount     = input.bool(false, 'Bar count',     group=gRows, tooltip='Show the number of bars (candles) since the start of the current session.')
+showCvd     = input.bool(false, 'CVD (session)', group=gRows, tooltip='Show the cumulative delta (CVD) row for the session.')
+showCvdHour = input.bool(false, 'CVD (1h)',      group=gRows, tooltip='Show the cumulative delta of the last hour (rolling sum of the delta over the last 60 minutes, independent of the session reset). On timeframes above 1h shows "-".')
+showVolume = input.bool(true, 'Volume',         group=gRows, tooltip='Show the total volume of the current candle (buy + sell).')
+showBuy    = input.bool(true, 'Buy (ask)',      group=gRows, tooltip='Show the buy (ask) volume row.')
+showSell   = input.bool(true, 'Sell (bid)',     group=gRows, tooltip='Show the sell (bid) volume row.')
+showDelta    = input.bool(true, 'Delta',        group=gRows, tooltip='Show the delta row (buy − sell) as an absolute value.')
+showDeltaPct = input.bool(false, 'Delta %',     group=gRows, tooltip='Show the delta row as a percentage share of total volume.')
+
+gColors = 'Colors'
+cNeutral = input.color(color.gray, 'Base color', group=gColors, tooltip='Base table text color: row names and neutral values (no data, zero delta). The header background and separators derive from it too.')
+
+gCvd = 'Cumulative delta (CVD)'
+resetDaily = input.bool(true, 'Reset CVD on new daily session', group=gCvd, tooltip='Cumulative delta (CVD) zeroed at the start of each day. Turn off to accumulate from the beginning of history.')
+
+// --- Footprint + metrics ---
+// The row-split arguments are irrelevant here - only the candle totals (delta,
+// buy volume, sell volume) are read, and those do not depend on the row height.
+fp = request.footprint(10, 70)
+hasData = not na(fp)
+float delta   = na
+float buyVol  = na
+float sellVol = na
+if hasData
+    delta   := fp.delta()
+    buyVol  := fp.buy_volume()
+    sellVol := fp.sell_volume()
+
+totalVol = hasData ? buyVol + sellVol : na
+hasDelta = hasData and not na(totalVol) and totalVol > 0
+if not hasDelta
+    delta   := na
+    buyVol  := na
+    sellVol := na
+deltaPct = hasDelta ? delta / totalVol * 100 : na
+
+newDay = ta.change(time('D')) != 0
+var float cvd = 0.0
+if resetDaily and newDay
+    cvd := 0.0
+if hasDelta
+    cvd += delta
+
+// --- CVD of the last hour (rolling sum of the delta over the last 60 minutes) ---
+tfSec       = timeframe.in_seconds()
+deltaForSum = hasDelta ? delta : 0.0
+barsPerHour = math.max(1, int(math.round(3600.0 / tfSec)))
+hourValid   = tfSec <= 3600
+cvdHour     = hourValid ? math.sum(deltaForSum, barsPerHour) : na
+
+// --- Session start + bar count (session = a day with the CVD reset, otherwise the whole history) ---
+var int sessionStart = na
+var int sessionBars  = 0
+if barstate.isfirst or (resetDaily and newDay)
+    sessionStart := time
+    sessionBars  := 0
+sessionBars += 1
+
+deltaColor = not hasDelta ? cNeutral : delta > 0 ? cBuy : delta < 0 ? cSell : cNeutral
+
+// --- K/M/B abbreviation; below 1000 an integer (no ".00") ---
+f_abbr(float x) =>
+    a = math.abs(x)
+    a >= 1e9 ? str.tostring(x / 1e9, '#.##') + 'B' : a >= 1e6 ? str.tostring(x / 1e6, '#.##') + 'M' : a >= 1e3 ? str.tostring(x / 1e3, '#.#') + 'K' : str.tostring(x, '#')
+
+// --- Signed variant for delta values: explicit "+" on positive numbers ---
+f_signed(float x) =>
+    (x > 0 ? '+' : '') + f_abbr(x)
+
+// --- Friendly chart-timeframe description (for the "last candle" header) ---
+f_tf() =>
+    tfSec < 60 ? str.tostring(tfSec) + 's' : tfSec < 3600 ? str.tostring(tfSec / 60, '#') + 'm' : tfSec < 86400 ? str.tostring(tfSec / 3600, '#') + 'h' : timeframe.period
+
+// --- Table text size ---
+szLbl = fontSize == 'Tiny' ? size.tiny : fontSize == 'Small' ? size.small : fontSize == 'Normal' ? size.normal : size.large
+
+// --- Table (position + margin configurable; margin = empty spacer cells, table without a frame) ---
+// The "Last candle · {timeframe}" header acts as a title bar; scope details go in the tooltip (hdrTip).
+isLeft = str.contains(tablePos, 'left')
+isBot  = str.contains(tablePos, 'Bottom')
+isMid  = str.contains(tablePos, 'Middle')
+isTop  = not isBot and not isMid
+tablePosition = isLeft ? (isTop ? position.top_left : isMid ? position.middle_left : position.bottom_left) : (isTop ? position.top_right : isMid ? position.middle_right : position.bottom_right)
+c0        = isLeft ? 1 : 0
+c1        = c0 + 1
+spacerCol = isLeft ? 0 : 2
+rowOffset = isTop ? 1 : 0
+hdrTip = 'Buy / sell / delta apply ONLY to the last (current) candle of the selected timeframe - e.g. the last minute on a 1m chart. CVD accumulates over the session.'
+hdrBg  = color.new(cNeutral, 82)   // subtle header-bar background
+anySession = showSessionStart or showBarCount or showCvd or showCvdHour
+anyCandle  = showVolume or showBuy or showSell or showDelta or showDeltaPct
+sepText   = '┄┄┄┄┄┄'
+sepColor  = color.new(cNeutral, 40)
+
+// CVD value color by sign (green positive / red negative / gray zero or missing)
+f_signColor(float x) =>
+    na(x) ? cNeutral : x > 0 ? cBuy : x < 0 ? cSell : cNeutral
+
+MAX_ROWS = 14   // header + at most all rows + separator + margins (with headroom)
+var table infoTable = table.new(tablePosition, 3, MAX_ROWS, frame_width=0, border_width=0)
+
+if barstate.islast
+    // 1) Build the list of visible rows in display order (separator = a Row with sepText in both columns).
+    rows = array.new<Row>()
+    if showSessionStart
+        rows.push(Row.new('Session start', na(sessionStart) ? '-' : str.format_time(sessionStart, 'yyyy-MM-dd HH:mm', syminfo.timezone), cNeutral, cNeutral))
+    if showBarCount
+        rows.push(Row.new('Bar count', str.tostring(sessionBars, '#'), cNeutral, cNeutral))
+    if showCvd
+        rows.push(Row.new('CVD (session)', hasDelta ? f_signed(cvd) : '-', cNeutral, f_signColor(cvd)))
+    if showCvdHour
+        rows.push(Row.new('CVD (1h)', na(cvdHour) ? '-' : f_signed(cvdHour), cNeutral, f_signColor(cvdHour)))
+    if anySession and anyCandle
+        rows.push(Row.new(sepText, sepText, sepColor, sepColor))
+    if showVolume
+        rows.push(Row.new('Volume', hasDelta ? f_abbr(totalVol) : '-', cNeutral, cNeutral))
+    if showBuy
+        rows.push(Row.new('Buy (ask)', hasDelta ? f_abbr(buyVol) : '-', cNeutral, cBuy))
+    if showSell
+        rows.push(Row.new('Sell (bid)', hasDelta ? f_abbr(sellVol) : '-', cNeutral, cSell))
+    if showDelta
+        rows.push(Row.new('Delta', hasDelta ? f_signed(delta) : '-', cNeutral, deltaColor, color.new(deltaColor, 80)))
+    if showDeltaPct
+        rows.push(Row.new('Delta %', na(deltaPct) ? '-' : (deltaPct > 0 ? '+' : '') + str.tostring(deltaPct, '#.#') + '%', cNeutral, deltaColor))
+
+    // 2) Render: clear the previous layout, margins (empty spacer cells), header, then the rows.
+    table.clear(infoTable, 0, 0, 2, MAX_ROWS - 1)
+    if tableMarginX > 0
+        table.cell(infoTable, spacerCol, rowOffset, '', width=tableMarginX)
+    if tableMarginY > 0 and not isMid and isTop
+        table.cell(infoTable, c0, 0, '', height=tableMarginY)
+    table.cell(infoTable, c0, rowOffset, 'Last candle', text_color=chart.fg_color, text_size=szLbl, bgcolor=hdrBg, tooltip=hdrTip)
+    table.cell(infoTable, c1, rowOffset, f_tf(),        text_color=chart.fg_color, text_size=szLbl, bgcolor=hdrBg, tooltip=hdrTip)
+    nRows = rows.size()
+    if nRows > 0
+        for i = 0 to nRows - 1
+            rw = rows.get(i)
+            rr = rowOffset + 1 + i
+            table.cell(infoTable, c0, rr, rw.label, text_color=rw.labColor, text_size=szLbl, bgcolor=rw.bg)
+            table.cell(infoTable, c1, rr, rw.value, text_color=rw.valColor, text_size=szLbl, bgcolor=rw.bg)
+    if tableMarginY > 0 and not isMid and not isTop
+        table.cell(infoTable, c0, rowOffset + 1 + nRows, '', height=tableMarginY)
+
+// Hidden series (Data Window only) - the table's numbers as data, usable as an
+// external source (input.source) in other scripts.
+plot(delta,               'Delta',         color=deltaColor, format=format.volume, display=display.data_window, editable=false)
+plot(buyVol,              'Buy (ask)',     color=cBuy,       format=format.volume, display=display.data_window, editable=false)
+plot(sellVol,             'Sell (bid)',    color=cSell,      format=format.volume, display=display.data_window, editable=false)
+plot(hasDelta ? cvd : na, 'CVD (session)', color=cNeutral,   format=format.volume, display=display.data_window, editable=false)
+plot(cvdHour,             'CVD (1h)',      color=cNeutral,   format=format.volume, display=display.data_window, editable=false)
+
+alertcondition(ta.crossover(delta, 0),  'Delta: flip to buy',  'Delta turned positive (buyers dominate)')
+alertcondition(ta.crossunder(delta, 0), 'Delta: flip to sell', 'Delta turned negative (sellers dominate)')

@@ -1,0 +1,58 @@
+//@version=5
+indicator("Stella's Trend Strength", shorttitle="TREND", overlay=false)
+
+// Trend Strength Indicator (ADX-based)
+// Shows trend strength 0-100 regardless of direction
+
+// Settings
+adx_len = input(14, "ADX Length")
+di_len = input(14, "DI Length")
+strong_trend = input(25, "Strong Trend Level")
+weak_trend = input(20, "Weak Trend Level")
+
+// Calculate ADX
+[di_plus, di_minus, adx] = ta.dmi(di_len, adx_len)
+
+// Trend Direction
+trend_up = di_plus > di_minus
+trend_down = di_minus > di_plus
+trend_neutral = di_plus == di_minus
+
+// Trend Strength Classification
+strength_label = adx >= strong_trend ? "Strong" : adx >= weak_trend ? "Moderate" : "Weak"
+strength_color = adx >= strong_trend ? color.green : adx >= weak_trend ? color.yellow : color.red
+
+// Combined Direction + Strength
+bull_trend = trend_up and adx >= weak_trend
+bear_trend = trend_down and adx >= weak_trend
+no_trend = adx < weak_trend
+
+// Plot ADX
+plot(adx, "Trend Strength", color=color.blue, linewidth=2)
+hline(strong_trend, "Strong Trend", color=color.green, linestyle=hline.style_dashed)
+hline(weak_trend, "Weak Trend", color=color.red, linestyle=hline.style_dashed)
+
+// Direction indicator
+plotshape(bull_trend and not bull_trend[1], "Bull Trend Start", shape.triangleup, location.bottom, color.green, size=size.small)
+plotshape(bear_trend and not bear_trend[1], "Bear Trend Start", shape.triangledown, location.top, color.red, size=size.small)
+
+// Background color for trend
+bgcolor(bull_trend ? color.new(color.green, 85) : bear_trend ? color.new(color.red, 85) : na)
+
+// Table with info
+var table info = table.new(position.top_right, 2, 3)
+if barstate.islast
+    table.cell(info, 0, 0, "Strength", bgcolor=color.gray, text_color=color.white)
+    table.cell(info, 1, 0, str.tostring(adx, "#.#"), bgcolor=strength_color, text_color=color.white)
+    table.cell(info, 0, 1, "Direction", bgcolor=color.gray, text_color=color.white)
+    table.cell(info, 1, 1, trend_up ? "BULL" : trend_down ? "BEAR" : "NEUTRAL",
+               bgcolor=trend_up ? color.green : trend_down ? color.red : color.gray,
+               text_color=color.white)
+    table.cell(info, 0, 2, "Label", bgcolor=color.gray, text_color=color.white)
+    table.cell(info, 1, 2, strength_label, bgcolor=strength_color, text_color=color.white)
+
+// Alerts
+alertcondition(ta.crossover(adx, strong_trend), "Strong Trend Forming", "ADX crossed above strong trend level")
+alertcondition(ta.crossunder(adx, weak_trend), "Trend Weakening", "ADX fell below weak trend level")
+alertcondition(bull_trend and not bull_trend[1], "Bull Trend Start", "Bullish trend started")
+alertcondition(bear_trend and not bear_trend[1], "Bear Trend Start", "Bearish trend started")

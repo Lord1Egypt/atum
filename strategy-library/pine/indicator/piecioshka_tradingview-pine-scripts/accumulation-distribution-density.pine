@@ -1,0 +1,69 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Piotr Kowalski "piecioshka"
+// Docs (EN): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/volume/accumulation-distribution-density/accumulation-distribution-density.md
+// Docs (PL): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/volume/accumulation-distribution-density/accumulation-distribution-density.pl.md
+
+//@version=6
+indicator('Accumulation / Distribution Density (VD)', overlay=true)
+
+// Accumulation / distribution density (VD) — modeled after Mieczyslaw Siudek's indicator from xStation (XTB).
+// Looks for candles whose volume-to-price-movement ratio (density = volume per unit of range)
+// is disproportionately high and which set a local extreme. Heavy turnover with little movement
+// at a low/high suggests position accumulation/distribution and a potential turning point.
+// Marker below a candle = accumulation density  (potential bullish signal),
+// marker above a candle = distribution density  (potential bearish signal).
+// Each marker is a plotshape, so the Style tab gives it its own visibility checkbox,
+// shape picker, position (above/below bar) dropdown, and color — per signal.
+// By default signals are evaluated only on closed candles (no repainting); with the
+// "Signal on closed candle only" option off, a signal on an unclosed candle may disappear
+// before it closes (conditions use live values).
+
+g = 'Parameters'
+lenExtreme    = input.int(5, 'Max/Min of (bars)', minval=1, group=g, tooltip='Number of previous candles against which the signal candle must set a new low (accumulation) or a new high (distribution).')
+lenSpread     = input.int(5, 'Average Spread of (bars)', minval=1, group=g, tooltip='Number of candles for the average range (high − low).')
+lenDensity    = input.int(5, 'Average Density of (bars)', minval=1, group=g, tooltip='Number of candles for the average density (volume / range).')
+useSpread     = input.bool(true, 'Spread condition', group=g, tooltip='Require the signal candle range not to exceed Spread Factor × average range (the candle must not be too big — density means heavy turnover with LITTLE movement).')
+spreadFactor  = input.float(1.4, 'Spread Factor', minval=0.1, step=0.1, group=g, tooltip='How much larger the signal candle range may be than the average for a signal to appear.')
+densityFactor = input.float(2, 'Density Factor', minval=1.0, step=0.1, group=g, tooltip='How much the signal candle density must exceed the average density.')
+closePct      = input.int(0, 'Bar close (%)', minval=0, maxval=100, group=g, tooltip='Filter on the close position within the candle range: for accumulation the close must be at least X% above the low, for distribution at least X% below the high. 0 disables the filter.')
+onlyConfirmed = input.bool(true, 'Signal on closed candle only', group=g, tooltip='Evaluate signals only when a candle closes - a marker never appears and then disappears on the live candle (no repainting). Turn off to watch signals form in real time on the unclosed candle.')
+
+spread  = high - low
+density = volume / math.max(spread, syminfo.mintick)   // volume per unit of movement; a zero-range doji → volume per 1 tick
+
+// Averages use a window ENDING at the previous candle — the signal candle does not inflate its own threshold.
+avgSpread  = ta.sma(spread, lenSpread)[1]
+avgDensity = ta.sma(density, lenDensity)[1]
+
+isNewLow  = low <= ta.lowest(low, lenExtreme)[1]
+isNewHigh = high >= ta.highest(high, lenExtreme)[1]
+
+densityOK = density >= densityFactor * avgDensity
+spreadOK  = not useSpread or spread <= spreadFactor * avgSpread
+
+// Close position within the candle range (0–100); a zero-range candle passes the filter in both directions
+posFromLow  = spread > 0 ? (close - low) / spread * 100 : 100
+posFromHigh = spread > 0 ? (high - close) / spread * 100 : 100
+
+// On historical candles barstate.isconfirmed is always true — the option only affects the live candle.
+confirmedOK = not onlyConfirmed or barstate.isconfirmed
+
+accSignal  = confirmedOK and volume > 0 and isNewLow and densityOK and spreadOK and posFromLow >= closePct
+distSignal = confirmedOK and volume > 0 and isNewHigh and densityOK and spreadOK and posFromHigh >= closePct
+
+// Markers as plotshapes — shape, position, and color live in the Style tab, per signal.
+plotshape(accSignal, 'Accumulation', style=shape.triangleup, location=location.belowbar, color=color.rgb(74, 136, 250), size=size.small)
+plotshape(distSignal, 'Distribution', style=shape.triangledown, location=location.abovebar, color=color.rgb(215, 125, 95), size=size.small)
+
+alertcondition(accSignal, 'Accumulation density', 'Accumulation density — potential bullish signal (heavy volume with little movement at a new low)')
+alertcondition(distSignal, 'Distribution density', 'Distribution density — potential bearish signal (heavy volume with little movement at a new high)')
+
+// Hidden signal series (+1 accumulation, -1 distribution, 0 none) — lets other scripts
+// use this indicator as an external source (input.source) and shows up in the Data Window.
+plot(accSignal ? 1 : distSignal ? -1 : 0, 'Signal', display=display.data_window, editable=false)
+
+// Warn when the symbol has no volume data at all — the indicator can never signal there.
+cumVolume = ta.cum(nz(volume))
+if barstate.islast and cumVolume == 0
+    var table warn = table.new(position.top_right, 1, 1)
+    table.cell(warn, 0, 0, 'No volume data on this symbol - the indicator cannot signal', text_color=color.white, bgcolor=color.new(color.red, 15), text_size=size.small)

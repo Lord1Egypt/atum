@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: MIT
+// © xsodus
+// Added Labels and alert conditions and other quality of life feature
+
+// This script was implemented based on CDC ActionZone indicator (by Piriya)
+// The concept is to send a buy signal if fast EMA crosses over slow EMA and send a sell signal when the slow EMA crosses over fast EMA.
+// In which, we call trend following strategy. 
+
+//@version=5
+strategy('Xsodus CDC ActionZone V3', overlay=true)
+
+sourceData = input(title='Source Data', defval=close)
+smoothPeriod = input(title='Smoothing period (1 = no smoothing)', defval=1)
+startDate = input.time(title='Start Date', defval=timestamp('2018-01-01T00:00+07:00'))
+endDate = input.time(title='End Date', defval=timestamp('9999-01-01T00:00+07:00'))
+
+fastEMAInput = input(title='Fast EMA period', defval=12)
+slowEMAInput = input(title='Slow EMA period', defval=26)
+
+isLongStrategy = input(title='Long Position Strategy', defval=true)
+enableStopLoss = input(title='Enable stop loss', defval=true)
+enableTrailingStop = input(title='Enable trailing stop', defval=false)
+stopLossPercentage = input.float(title='Stop loss %', defval=20) * 0.01
+
+
+xPrice = ta.ema(sourceData, smoothPeriod)
+
+emaFast = ta.ema(sourceData, fastEMAInput)
+emaSlow = ta.ema(sourceData, slowEMAInput)
+
+lastPrice = sourceData[1]
+
+var isOrdered = false
+// Calculate stop loss price condition.
+var positionStopPrice = 0.0
+
+long = emaFast > emaSlow
+short = emaFast < emaSlow
+
+// price bar colors
+Green = long and xPrice > emaFast  // Buy
+Blue = short and xPrice > emaFast and xPrice > emaSlow  //Pre Buy 2
+LBlue = short and xPrice > emaFast and xPrice < emaSlow  //Pre Buy 1
+
+Red = short and xPrice < emaFast  // Sell
+Orange = long and xPrice < emaFast and xPrice < emaSlow  // Pre Sell 2
+Yellow = long and xPrice < emaFast and xPrice > emaSlow  // Pre Sell 1
+
+
+// Buy if the fast EMA is higer than slow EMA and current histrogram MACD is higer than 0
+buy = long
+sell = short
+
+bColor = Green ? color.green : Blue ? color.blue : LBlue ? color.aqua : Red ? color.red : Orange ? color.orange : Yellow ? color.yellow : color.black
+barcolor(bColor)
+
+//****************************************************************************//
+// Display MA lines
+
+FastL = plot(emaFast, 'Fast EMA', color=color.new(color.red, 0))
+SlowL = plot(emaSlow, 'Slow EMA', color=color.new(color.blue, 0))
+fillcolor = long ? color.green : short ? color.red : color.black
+fill(FastL, SlowL, fillcolor, transp=90)
+
+
+plot(emaFast, title='Fast EMA', color=color.new(color.green, 0), linewidth=3)
+plot(emaSlow, title='Slow EMA', color=color.new(color.red, 0), linewidth=3)
+
+
+
+strategyName = isLongStrategy ? 'Long' : 'Short'
+shouldOpenPosition = isLongStrategy ? buy : sell
+shouldClosePosition = not shouldOpenPosition
+mainStrategy = isLongStrategy ? strategy.long : strategy.short
+hasClosePos = false
+hasExitPos = false
+
+// Update open position status
+if time > startDate and time < endDate and isOrdered == false and strategy.position_size == 0
+    isOrdered := shouldOpenPosition
+    if isLongStrategy
+        strategy.order(strategyName, strategy.long, when=shouldOpenPosition)
+    else
+        strategy.order(strategyName, strategy.short, when=shouldOpenPosition)
+
+
+// Update stop loss status
+if strategy.opentrades > 0 and enableStopLoss
+    if enableTrailingStop and strategy.position_avg_price < lastPrice
+        if isLongStrategy
+            positionStopPrice := lastPrice * (1 - stopLossPercentage)
+            positionStopPrice
+        else
+            positionStopPrice := lastPrice * (1 + stopLossPercentage)
+            positionStopPrice
+    if not enableTrailingStop
+        if isLongStrategy
+            positionStopPrice := strategy.position_avg_price * (1 - stopLossPercentage)
+            positionStopPrice
+        else
+            positionStopPrice := strategy.position_avg_price * (1 + stopLossPercentage)
+            positionStopPrice
+
+if strategy.opentrades > 0 and enableStopLoss and positionStopPrice > 0.0
+    hasExitPos = true
+    strategy.exit(strategyName, stop=positionStopPrice)
+
+// Update close position status
+if strategy.opentrades > 0
+    hasClosePos = true
+    strategy.close(strategyName, when=shouldClosePosition)
+
+// Reset flag for opening a new order
+if strategy.opentrades == 0 and shouldClosePosition
+    isOrdered := false
+    positionStopPrice := 0.0
+    positionStopPrice
+
+// Debug in data window
+plotchar(sourceData[0], 'Current Price', '', location=location.top)
+plotchar(lastPrice, 'Last Bar Price', '', location=location.top)
+plotchar(positionStopPrice, 'Current Stop Loss Price', '', location=location.top)
+
+plotchar(buy, 'buy', '', location=location.top)
+plotchar(sell, 'sell', '', location=location.top)
+plotchar(shouldOpenPosition, 'Should open position', '', location=location.top)
+plotchar(shouldClosePosition, 'Should close position', '', location=location.top)
+plotchar(isOrdered, 'isOrdered', '', location=location.top)
+
+plotchar(hasClosePos, 'hasClosePos', '', location=location.top)
+plotchar(hasExitPos, 'hasExitPos', '', location=location.top)
+plotchar(strategy.opentrades, 'position count', '', location=location.top)
+

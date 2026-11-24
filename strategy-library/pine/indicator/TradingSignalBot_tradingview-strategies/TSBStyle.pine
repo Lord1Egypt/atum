@@ -1,0 +1,299 @@
+//@version=6
+// This source code is subject to the terms of the MIT License (LICENSE in the source repository).
+// © TradingSignalBot
+
+// @description The drawing style the strategy pack shares: the entry, the stop and up to three targets drawn as levels from the signal candle, each labelled with its price and its distance in pips; the signal marked on its candle; a panel with the latest signal; and the signal as a message and as JSON for a webhook. Colours: entry white, stop red, targets green, levels gold, ranges blue, indicator marks violet.
+library("TSBStyle", overlay = true)
+
+// ---- TSBStyle:begin ----
+// The block between these two markers is the whole library. scripts/sync-style.mjs copies it into
+// every indicator (with "export" taken off), so each indicator compiles on its own.
+
+// @function The ink colour: panel backgrounds.
+// @returns color
+export colInk() => #0B0B0D
+
+// @function The grey colour: secondary text and frames.
+// @returns color
+export colGrey() => #8A949E
+
+// @function The entry colour.
+// @returns color
+export colWhite() => #FFFFFF
+
+// @function The stop colour, and sells.
+// @returns color
+export colRed() => #E5484D
+
+// @function The target colour, and buys.
+// @returns color
+export colGreen() => #16A34A
+
+// @function The colour of a strategy's levels (the opening range, a swing, the previous day's high or low).
+// @returns color
+export colGold() => #E8B84A
+
+// @function The colour of a session range (the Asian range) and a second indicator line.
+// @returns color
+export colBlue() => #5B8DEF
+
+// @function The colour of indicator marks (a trend EMA, a divergence line).
+// @returns color
+export colViolet() => #B18CFF
+
+// @type The drawings of one signal, deleted together once it is no longer among the newest kept.
+// @field lines Its lines.
+// @field labels Its labels.
+// @field boxes Its boxes.
+export type Drawn
+    array<line> lines
+    array<label> labels
+    array<box> boxes
+
+// @function An empty set of drawings.
+// @returns Drawn
+export newDrawn() =>
+    Drawn.new(array.new<line>(), array.new<label>(), array.new<box>())
+
+// @function The pip size of a symbol, by the house convention: gold one dollar, JPY pairs 0.01, other currency pairs 0.0001, anything else ten ticks.
+// @param ticker The symbol's ticker (syminfo.ticker).
+// @param symType The symbol's type (syminfo.type).
+// @param mintick The symbol's tick (syminfo.mintick).
+// @param override A pip size to use instead; 0 for automatic.
+// @returns float
+export pipSize(string ticker, string symType, float mintick, float override) =>
+    string fiat = "USD EUR GBP JPY CHF AUD NZD CAD NOK SEK DKK SGD HKD MXN ZAR PLN TRY CNH"
+    bool fx = symType == "forex" or (str.length(ticker) == 6 and str.contains(fiat, str.substring(ticker, 0, 3)) and str.contains(fiat, str.substring(ticker, 3, 6)))
+    float p = mintick * 10.0
+    if override > 0
+        p := override
+    else if str.contains(ticker, "XAU")
+        p := 1.0
+    else if fx
+        p := str.endswith(ticker, "JPY") ? 0.01 : 0.0001
+    p
+
+// @function The distance between two prices in whole pips.
+// @param a A price.
+// @param b Another price.
+// @param pipSz The pip size (pipSize()).
+// @returns int
+export pipsBetween(float a, float b, float pipSz) =>
+    math.round(math.abs(a - b) / pipSz)
+
+// @function A price as the chart shows it.
+// @param v The price.
+// @returns string
+export priceText(float v) =>
+    str.tostring(v, format.mintick)
+
+// @function The target multiples as a sentence: "1, 2, 3"; a target of 0 is left out.
+// @param r1 TP1 in multiples of the stop distance.
+// @param r2 TP2.
+// @param r3 TP3, or 0.
+// @returns string
+export rsText(float r1, float r2, float r3) =>
+    string s = str.tostring(r1) + ", " + str.tostring(r2)
+    if r3 > 0
+        s += ", " + str.tostring(r3)
+    s
+
+// @function A target at a multiple of the stop distance, or na when the multiple is 0.
+// @param isBuy True for a buy.
+// @param entry The entry price.
+// @param stop The stop price.
+// @param r The multiple.
+// @returns float
+export targetAt(bool isBuy, float entry, float stop, float r) =>
+    float risk = math.abs(entry - stop)
+    r > 0 ? (isBuy ? entry + r * risk : entry - r * risk) : na
+
+// @function A filled tag at the right end of a level, with its text.
+// @param x The bar index of the tag.
+// @param y Its price.
+// @param txt Its text.
+// @param bg Its fill.
+// @param fg Its text colour.
+// @param lblSize A label size ("tiny", "small", "normal", "large").
+// @returns label
+export levelTag(int x, float y, string txt, color bg, color fg, string lblSize) =>
+    label.new(x = x, y = y, text = txt, xloc = xloc.bar_index, yloc = yloc.price, color = bg, textcolor = fg, style = label.style_label_left, size = lblSize)
+
+// @function The entry, the stop and the targets, drawn from the signal candle, and the signal marked on it.
+// @param isBuy True for a buy.
+// @param entry The entry price (the signal candle's close).
+// @param stop The stop price.
+// @param tp1 TP1.
+// @param tp2 TP2, or na.
+// @param tp3 TP3, or na.
+// @param x The signal candle's bar index.
+// @param length How many candles the levels run to the right.
+// @param name The strategy's name, for the mark on the candle.
+// @param pipSz The pip size (pipSize()).
+// @param lblSize A label size.
+// @param anchor Where the mark sits: the candle's low for a buy, its high for a sell.
+// @returns Drawn
+export drawSignal(bool isBuy, float entry, float stop, float tp1, float tp2, float tp3, int x, int length, string name, float pipSz, string lblSize, float anchor) =>
+    Drawn d = newDrawn()
+    int x2 = x + length
+    string word = isBuy ? "BUY" : "SELL"
+    d.lines.push(line.new(x1 = x, y1 = entry, x2 = x2, y2 = entry, xloc = xloc.bar_index, color = colWhite(), width = 2, style = line.style_solid))
+    d.lines.push(line.new(x1 = x, y1 = stop, x2 = x2, y2 = stop, xloc = xloc.bar_index, color = colRed(), width = 1, style = line.style_dashed))
+    d.labels.push(levelTag(x2, entry, "ENTRY · " + word + " " + priceText(entry), colWhite(), colInk(), lblSize))
+    d.labels.push(levelTag(x2, stop, "STOP LOSS · " + str.tostring(pipsBetween(entry, stop, pipSz)) + " PIPS · " + priceText(stop), colRed(), colWhite(), lblSize))
+    array<float> tps = array.from(tp1, tp2, tp3)
+    for [k, tp] in tps
+        if not na(tp)
+            d.lines.push(line.new(x1 = x, y1 = tp, x2 = x2, y2 = tp, xloc = xloc.bar_index, color = colGreen(), width = 1, style = line.style_dashed))
+            d.labels.push(levelTag(x2, tp, "TP" + str.tostring(k + 1) + " · +" + str.tostring(pipsBetween(entry, tp, pipSz)) + " PIPS · " + priceText(tp), colGreen(), colWhite(), lblSize))
+    d.labels.push(label.new(x = x, y = anchor, text = word + " · " + name, xloc = xloc.bar_index, yloc = yloc.price, color = isBuy ? colGreen() : colRed(), textcolor = colWhite(), style = isBuy ? label.style_label_up : label.style_label_down, size = lblSize))
+    d
+
+// @function A shaded range (the opening range, the Asian range, a sweep) with its name in the corner.
+// @param xLeft The first bar index.
+// @param xRight The last bar index.
+// @param top The range's high.
+// @param bottom The range's low.
+// @param col Its colour.
+// @param txt Its name.
+// @param lblSize A label size.
+// @returns box
+export rangeBox(int xLeft, int xRight, float top, float bottom, color col, string txt, string lblSize) =>
+    box.new(left = xLeft, top = top, right = xRight, bottom = bottom, border_color = col, border_width = 1, border_style = line.style_solid, xloc = xloc.bar_index, bgcolor = color.new(col, 85), text = txt, text_size = lblSize, text_color = col, text_halign = text.align_left, text_valign = text.align_top)
+
+// @function A strategy's level (a swing, the previous day's high or low): a dotted line with its name at the left end.
+// @param x1 The bar index it starts at.
+// @param x2 The bar index it ends at.
+// @param y Its price.
+// @param col Its colour.
+// @param txt Its name.
+// @param below True to write the name under the line.
+// @param lblSize A label size.
+// @returns [line, label]
+export levelLine(int x1, int x2, float y, color col, string txt, bool below, string lblSize) =>
+    line ln = line.new(x1 = x1, y1 = y, x2 = x2, y2 = y, xloc = xloc.bar_index, color = col, width = 1, style = line.style_dotted)
+    label lb = label.new(x = x1, y = y, text = txt, xloc = xloc.bar_index, yloc = yloc.price, color = color.new(col, 100), textcolor = col, style = below ? label.style_label_up : label.style_label_down, size = lblSize)
+    [ln, lb]
+
+// @function A small mark on a candle (the break, the sweep, an RSI value).
+// @param x The bar index.
+// @param y The price.
+// @param txt Its text.
+// @param col Its colour.
+// @param above True to put it over the price, false under it.
+// @param tip The tooltip.
+// @param lblSize A label size.
+// @returns label
+export markLabel(int x, float y, string txt, color col, bool above, string tip, string lblSize) =>
+    label.new(x = x, y = y, text = txt, xloc = xloc.bar_index, yloc = yloc.price, color = color.new(col, 100), textcolor = col, style = above ? label.style_label_down : label.style_label_up, size = lblSize, tooltip = tip)
+
+// @function Deletes a signal's drawings.
+// @param d The drawings.
+// @returns bool
+export deleteDrawn(Drawn d) =>
+    for ln in d.lines
+        line.delete(ln)
+    for lb in d.labels
+        label.delete(lb)
+    for bx in d.boxes
+        box.delete(bx)
+    true
+
+// @function Keeps a signal's drawings, and deletes the oldest beyond the newest maxKept.
+// @param list The drawings kept so far.
+// @param d The new signal's drawings.
+// @param maxKept How many signals to keep on the chart.
+// @returns int
+export keepDrawn(array<Drawn> list, Drawn d, int maxKept) =>
+    list.push(d)
+    while list.size() > math.max(maxKept, 1)
+        deleteDrawn(list.shift())
+    list.size()
+
+// @function The signal as the bot's message: side, symbol and strategy; entry, stop and targets in pips; the strategy's line; the disclaimer.
+// @param isBuy True for a buy.
+// @param symbol The symbol.
+// @param name The strategy's name.
+// @param entry The entry.
+// @param stop The stop.
+// @param tp1 TP1.
+// @param tp2 TP2, or na.
+// @param tp3 TP3, or na.
+// @param pipSz The pip size.
+// @param why The strategy's sentence on what happened and where the stop and targets go.
+// @returns string
+export signalText(bool isBuy, string symbol, string name, float entry, float stop, float tp1, float tp2, float tp3, float pipSz, string why) =>
+    string s = (isBuy ? "🟢 BUY " : "🔴 SELL ") + symbol + " · " + name + "\n\n"
+    s += "Entry: " + priceText(entry) + " (market)\n"
+    s += "Stop: " + priceText(stop) + " (" + str.tostring(pipsBetween(entry, stop, pipSz)) + " pips)\n"
+    array<float> tps = array.from(tp1, tp2, tp3)
+    for [k, tp] in tps
+        if not na(tp)
+            s += "TP" + str.tostring(k + 1) + ": " + priceText(tp) + " (+" + str.tostring(pipsBetween(entry, tp, pipSz)) + " pips)\n"
+    s += "\n" + why + "\n\nNot financial advice. Trade at your own risk."
+    s
+
+// @function A string made safe to put between quotes in JSON.
+// @param s The string.
+// @returns string
+export jsonText(string s) =>
+    str.replace_all(str.replace_all(str.replace_all(s, "\\", "\\\\"), "\"", "\\\""), "\n", "\\n")
+
+// @function The signal as JSON for a webhook (the format docs/alerts.md describes).
+// @param id The strategy's id ("london-breakout").
+// @param isBuy True for a buy.
+// @param symbol The symbol (syminfo.ticker).
+// @param exchange The exchange (syminfo.prefix).
+// @param tf The chart's timeframe (timeframe.period).
+// @param entry The entry.
+// @param stop The stop.
+// @param tp1 TP1.
+// @param tp2 TP2, or na.
+// @param tp3 TP3, or na.
+// @param barTime The signal candle's close time, in milliseconds (time_close).
+// @param msg The message (signalText()).
+// @param secretKey A shared secret for the webhook, or "".
+// @returns string
+export alertJson(string id, bool isBuy, string symbol, string exchange, string tf, float entry, float stop, float tp1, float tp2, float tp3, int barTime, string msg, string secretKey) =>
+    string tps = priceText(tp1)
+    if not na(tp2)
+        tps += "," + priceText(tp2)
+    if not na(tp3)
+        tps += "," + priceText(tp3)
+    string j = "{\"source\":\"tv-strategies\",\"strategy\":\"" + id + "\",\"symbol\":\"" + jsonText(symbol) + "\",\"exchange\":\"" + jsonText(exchange) + "\",\"timeframe\":\"" + tf + "\""
+    j += ",\"side\":\"" + (isBuy ? "buy" : "sell") + "\",\"entry\":" + priceText(entry) + ",\"stop\":" + priceText(stop) + ",\"targets\":[" + tps + "]"
+    j += ",\"time\":" + str.tostring(barTime) + ",\"text\":\"" + jsonText(msg) + "\""
+    if secretKey != ""
+        j += ",\"secret\":\"" + jsonText(secretKey) + "\""
+    j + "}"
+
+// @function Fills the latest-signal panel: the strategy, the side and symbol, and the levels.
+// @param t A table of one column and three rows.
+// @param isBuy True for a buy.
+// @param name The strategy's name.
+// @param symbol The symbol.
+// @param detail The levels in one line.
+// @returns bool
+export heroPanel(table t, bool isBuy, string name, string symbol, string detail) =>
+    table.cell(t, 0, 0, "New signal · " + name, text_color = colGrey(), text_halign = text.align_right, text_size = size.small)
+    table.cell(t, 0, 1, (isBuy ? "▲ BUY  " : "▼ SELL  ") + symbol, text_color = isBuy ? colGreen() : colRed(), text_halign = text.align_right, text_size = size.large)
+    table.cell(t, 0, 2, detail, text_color = colWhite(), text_halign = text.align_right, text_size = size.small)
+    true
+
+// @function Writes a notice (a timeframe the strategy cannot run on) in a one-cell table.
+// @param t A table of one cell.
+// @param msg The notice.
+// @returns bool
+export notice(table t, string msg) =>
+    table.cell(t, 0, 0, msg, text_color = colGold(), text_halign = text.align_left, text_size = size.small)
+    true
+// ---- TSBStyle:end ----
+
+// A demonstration when the library itself is added to a chart: a buy at the last close, the stop
+// one ATR under it, targets at 1, 2 and 3 times the stop.
+var array<Drawn> demo = array.new<Drawn>()
+float demoAtr = ta.atr(14)
+if barstate.islastconfirmedhistory and not na(demoAtr)
+    float pipDemo = pipSize(syminfo.ticker, syminfo.type, syminfo.mintick, 0.0)
+    float stopDemo = close - demoAtr
+    keepDrawn(demo, drawSignal(true, close, stopDemo, targetAt(true, close, stopDemo, 1.0), targetAt(true, close, stopDemo, 2.0), targetAt(true, close, stopDemo, 3.0), bar_index, 15, "Style demo", pipDemo, size.small, low), 1)

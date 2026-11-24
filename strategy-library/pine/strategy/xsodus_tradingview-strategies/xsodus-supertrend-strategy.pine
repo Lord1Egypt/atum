@@ -1,0 +1,145 @@
+// SPDX-License-Identifier: MIT
+// © xsodus
+
+// =============================================================================
+// Xsodus Supertrend Strategy – Production-Ready (Long Only) V3
+// =============================================================================
+// Language: Pine Script® v6
+// =============================================================================
+
+//@version=6
+strategy("Xsodus Supertrend Strategy (Long Only) V3",
+     overlay        = true,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 100,
+     initial_capital = 10000,
+     commission_type = strategy.commission.percent,
+     commission_value = 0.1,
+     slippage        = 2,
+     margin_long     = 0,           // v6 default is 100; explicit for clarity
+     margin_short    = 0,           // v6 default is 100
+     calc_on_every_tick = false,      // avoid repainting – calculate on bar close only
+     process_orders_on_close = false) // orders fill on next bar's open (no lookahead)
+
+// ─── Date Range ──────────────────────────────────────────────────────────────
+startDate = input.time(title  = "Start Date", defval = timestamp("2018-01-01T00:00+07:00"), group = "Date Range")
+endDate   = input.time(title  = "End Date",   defval = timestamp("9999-12-31T00:00+07:00"), group = "Date Range")
+inDateRange = time >= startDate and time <= endDate
+
+// ─── Supertrend Settings ─────────────────────────────────────────────────────
+stLength = input.int(  title = "Supertrend Length",     defval = 12,  minval = 1,               group = "Supertrend")
+stFactor = input.float(title = "Supertrend Multiplier", defval = 2.0, minval = 0.1, step = 0.1, group = "Supertrend")
+
+// ─── Trend Filter ────────────────────────────────────────────────────────────
+useEmaFilter  = input.bool( title = "Enable EMA Filter",  defval = false,                           group = "Trend Filter")
+emaLength     = input.int(  title = "EMA Length",          defval = 200, minval = 1,                 group = "Trend Filter")
+
+// ─── Stop-Loss Settings ──────────────────────────────────────────────────────
+slType = input.string(title = "Stop-Loss Type", defval = "Percentage",
+     options = ["None", "Percentage", "ATR"], group = "Risk Management")
+slPercent   = input.float(title = "SL Percentage (%)",    defval = 5.0,  minval = 0.1, step = 0.5, group = "Risk Management")
+slAtrMult   = input.float(title = "SL ATR Multiplier",    defval = 2.0,  minval = 0.1, step = 0.1, group = "Risk Management")
+slAtrLength = input.int(  title = "SL ATR Length",         defval = 14,   minval = 1,               group = "Risk Management")
+
+// ─── Take-Profit Settings ────────────────────────────────────────────────────
+useTakeProfit = input.bool( title = "Enable Take Profit",  defval = true,                            group = "Risk Management")
+rrRatio       = input.float(title = "Risk/Reward Ratio",   defval = 2.0,  minval = 0.5, step = 0.5, group = "Risk Management")
+
+// ─── Trailing Stop ───────────────────────────────────────────────────────────
+useTrailing      = input.bool( title = "Enable Trailing Stop",        defval = false,                           group = "Trailing Stop")
+trailPercent     = input.float(title = "Trailing Stop Offset (%)",    defval = 2.0,  minval = 0.1, step = 0.5, group = "Trailing Stop")
+trailActivation  = input.float(title = "Trailing Activation Profit (%)", defval = 1.0, minval = 0.0, step = 0.5, group = "Trailing Stop")
+
+// =============================================================================
+// Indicator Calculations
+// =============================================================================
+
+// Supertrend
+[superTrend, stDirection] = ta.supertrend(stFactor, stLength)
+
+// Detect the actual FLIP
+bullishFlip = stDirection == -1 and stDirection[1] == 1   // bearish → bullish
+bearishFlip = stDirection ==  1 and stDirection[1] == -1  // bullish → bearish
+
+// EMA trend filter
+ema = ta.ema(close, emaLength)
+emaFilterOk = useEmaFilter ? close > ema : true
+
+// ATR for ATR-based stop-loss
+atrValue = ta.atr(slAtrLength)
+
+// =============================================================================
+// Entry / Exit Logic
+// =============================================================================
+
+// Entry condition
+longCondition = bullishFlip and emaFilterOk and inDateRange and strategy.position_size == 0
+
+// Exit condition
+exitCondition = bearishFlip and strategy.position_size > 0
+
+// ─── Calculate SL / TP prices on entry ───────────────────────────────────────
+var float entryPrice   = na
+var float stopLossPrice = na
+var float takeProfitPrice = na
+
+if longCondition
+    entryPrice := close  
+
+    // Stop-loss price
+    if slType == "Percentage"
+        stopLossPrice := entryPrice * (1 - slPercent / 100)
+    else if slType == "ATR"
+        stopLossPrice := entryPrice - (atrValue * slAtrMult)
+    else
+        stopLossPrice := na
+
+    // Take-profit price
+    if useTakeProfit and not na(stopLossPrice)
+        riskDistance    = entryPrice - stopLossPrice
+        takeProfitPrice := entryPrice + (riskDistance * rrRatio)
+    else
+        takeProfitPrice := na
+
+// ─── Place Orders ────────────────────────────────────────────────────────────
+if longCondition
+    strategy.entry("Long", strategy.long)
+
+if strategy.position_size > 0 and slType != "None"
+    if useTrailing
+        trailOffset = close * trailPercent / 100
+        trailActivationPrice = strategy.position_avg_price * (1 + trailActivation / 100)
+        strategy.exit("SL/TP", "Long",
+             stop         = stopLossPrice,
+             limit      = useTakeProfit ? takeProfitPrice : na,
+             trail_price = trailActivationPrice,
+             trail_offset = trailOffset)
+    else
+        strategy.exit("SL/TP", "Long",
+             stop  = stopLossPrice,
+             limit = useTakeProfit ? takeProfitPrice : na)
+
+if exitCondition
+    strategy.close("Long", comment = "ST Bearish Flip")
+
+// ─── Reset state ─────────────────────────────────────────────────────────────
+if strategy.position_size == 0
+    entryPrice      := na
+    stopLossPrice   := na
+    takeProfitPrice := na
+
+// =============================================================================
+// Visuals
+// =============================================================================
+
+stColor = stDirection == -1 ? color.new(#26a69a, 0) : color.new(#ef5350, 0)
+plot(superTrend, "Supertrend", color = stColor, linewidth = 2, style = plot.style_linebr)
+plot(useEmaFilter ? ema : na, "EMA Filter", color = color.new(color.orange, 30), linewidth = 1)
+
+plot(strategy.position_size > 0 ? stopLossPrice   : na, "Stop Loss",   color = color.new(color.red, 0),   linewidth = 1, style = plot.style_linebr)
+plot(strategy.position_size > 0 ? takeProfitPrice  : na, "Take Profit", color = color.new(color.green, 0), linewidth = 1, style = plot.style_linebr)
+
+plotshape(longCondition, "Buy Signal",  shape.triangleup,   location.belowbar, color.new(#26a69a, 0), size = size.small)
+plotshape(exitCondition, "Sell Signal", shape.triangledown, location.abovebar, color.new(#ef5350, 0), size = size.small)
+
+bgcolor(stDirection == -1 ? color.new(#26a69a, 92) : color.new(#ef5350, 95))

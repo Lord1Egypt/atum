@@ -1,0 +1,36 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Piotr Kowalski "piecioshka"
+// Docs (EN): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/1x-ma/1x-ma.md
+// Docs (PL): https://github.com/piecioshka/tradingview-pine-scripts/blob/main/indicators/overlays/1x-ma/1x-ma.pl.md
+
+//@version=6
+indicator('1x MA = Moving Average', overlay = true)
+
+aLen = input(50, 'Length')
+aType = input.string(title='Type', options=['SMA', 'EMA', 'WMA', 'VWMA', 'RMA'], defval='EMA')
+aColor = input.color(color.white, 'Color')
+
+aSeries = switch aType
+    'SMA' => ta.sma(close, aLen)
+    'EMA' => ta.ema(close, aLen)
+    'WMA' => ta.wma(close, aLen)
+    'VWMA' => ta.vwma(close, aLen)
+    'RMA' => ta.rma(close, aLen)
+    => na
+
+showLabels = input.bool(true, 'Show label (length and type)', group='Labels')
+
+plot(aSeries, 'MA', color=color.new(aColor, 30), linewidth=2, force_overlay=true)
+
+updateLabel(label lbl, float y, string txt, color col) =>
+    label result = lbl
+    if na(result)
+        result := label.new(bar_index, y, txt, style=label.style_label_left, color=color.new(color.black, 100), textcolor=col, force_overlay=true)
+    label.set_xy(result, bar_index, y)
+    label.set_text(result, txt)
+    result
+
+var label aLabel = na
+
+if showLabels and barstate.islast
+    aLabel := updateLabel(aLabel, aSeries, str.tostring(aLen) + ' ' + aType, aColor)

@@ -1,0 +1,143 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Stocks Developer
+
+//@version=6
+
+// "calc_on_every_tick = true" means the strategy checks the signal on every
+// price change (tick), not only when the candle closes. So your order fires
+// faster during live trading. The catch: results while the candle is still
+// forming can change until it closes, so live trades may not match backtest
+// results. Set it to "false" if you want to act only on closed candles.
+strategy("Moving Average - Intraday", shorttitle = "MA - Intraday",
+     overlay = true, calc_on_every_tick = true)
+
+
+// ========================================================================
+//  YOUR SETTINGS
+//  You change all of these from the strategy Settings window on the chart.
+//  You do NOT need to edit the code.
+// ========================================================================
+
+// Trading time window for the day. Format is START-END in 24-hour time.
+// Example "0915-1455" = start at 9:15 am, stop new trades and square off by
+// 2:55 pm. Keep the end time at least 2 minutes before your broker's auto
+// square-off time.
+i_marketSession = input.session(title = "Market session",
+     defval = "0915-1455", confirm = true, group = "Strategy")
+
+// Short-term moving average length (fewer candles = reacts faster).
+i_shortPeriod = input.int(title = "Short MA Period",
+     defval = 10, minval = 2, maxval = 20, confirm = true, group = "Strategy")
+
+// Long-term moving average length (more candles = smoother, slower).
+i_longPeriod = input.int(title = "Long MA Period",
+     defval = 40, minval = 3, maxval = 120, confirm = true, group = "Strategy")
+
+// ----- Where to send the order (set these once in Settings) -----
+// Your AutoTrader Web account name (or a Group name to trade many accounts).
+i_account  = input.string("ACC_NICK_NAME", "Account or Group name",
+     tooltip = "Your Pseudo account name, or a Group name to trade many accounts at once",
+     group = "Order routing")
+// Tick this ON only if the name above is a Group, not a single account.
+i_useGroup = input.bool(false, "This is a Group account",
+     tooltip = "Tick this if the name above is a Group account", group = "Order routing")
+// The contract/stock to trade, written the AutoTrader Web way.
+// Examples: NIFTY_28-JUL-2026_FUT (a future) or SBIN (a stock).
+i_symbol   = input.string("NIFTY_28-JUL-2026_FUT", "Symbol",
+     tooltip = "AutoTrader Web broker-independent symbol, e.g. NIFTY_28-JUL-2026_FUT or SBIN",
+     group = "Order routing")
+// The exchange code for that symbol. Use NFO for futures/options, NSE for stocks.
+i_exchange = input.string("NFO", "Exchange",
+     tooltip = "Exchange code, e.g. NFO for futures/options or NSE for stocks",
+     group = "Order routing")
+// Product type: INTRADAY (same-day), DELIVERY, or NORMAL (carry forward).
+i_product  = input.string("INTRADAY", "Product type",
+     tooltip = "INTRADAY, DELIVERY or NORMAL", group = "Order routing")
+
+
+// ========================================================================
+//  THE ALERT MESSAGE (this is what tells AutoTrader Web what to do)
+// ========================================================================
+//
+// AutoTrader Web reads a simple text, ONE setting per line, like this:
+//
+//     account=ACC_NICK_NAME
+//     symbol=NIFTY_28-JUL-2026_FUT
+//     exchange=NFO
+//     producttype=INTRADAY
+//     tradetype=BUY
+//     ordertype=MARKET
+//     lots=1
+//
+// Below, we build that same text automatically from your settings above.
+//
+//  - The "+" signs just glue the pieces together into one long text.
+//  - "\n" means "go to a new line" (the same as pressing Enter). We put one
+//    after every setting so each ends up on its own line, exactly as shown
+//    above. Without "\n" everything would run together on one line and would
+//    not work.
+//  - {{strategy.order.action}} and {{strategy.order.contracts}} are TradingView
+//    placeholders. TradingView fills them in for you when the alert fires:
+//        {{strategy.order.action}}    becomes  BUY  or  SELL
+//        {{strategy.order.contracts}} becomes  the size of that order
+//    Leave these two exactly as they are. Do NOT type your own BUY/SELL or a
+//    fixed number here, or the direction and the reverse-size will be wrong.
+//  - Size line: on a futures or options chart, {{strategy.order.contracts}} is a
+//    LOT count, so we send "lots=". On a stock chart it is a share count, so we
+//    send "quantity=". The line below picks the right one from your symbol, so
+//    the same script works for both.
+//  - The first line uses "group=" when you ticked "This is a Group account",
+//    otherwise "account=". Everything else stays the same.
+
+// Pick the size keyword from the symbol: F&O contracts are counted in lots,
+// stocks in shares.
+symUpper = str.upper(i_symbol)
+isDerivative = str.contains(symUpper, "_FUT") or str.contains(symUpper, "_CE_") or str.contains(symUpper, "_PE_")
+sizeKey = isDerivative ? "lots=" : "quantity="
+
+alertMsg = (i_useGroup ? "group=" : "account=") + i_account + "\n" +
+     "symbol="      + i_symbol   + "\n" +
+     "exchange="    + i_exchange + "\n" +
+     "producttype=" + i_product  + "\n" +
+     "tradetype={{strategy.order.action}}\n" +
+     "ordertype=MARKET\n" +
+     sizeKey + "{{strategy.order.contracts}}"
+
+
+// ========================================================================
+//  STRATEGY LOGIC (you normally do not need to touch this)
+// ========================================================================
+
+// A small helper that answers: is the current candle inside your trading
+// time window? true = yes, we may trade; false = outside your hours.
+barInSession(sess) => not na(time(timeframe.period, sess))
+
+// Calculate the two moving averages from your settings.
+shortAvg = ta.sma(close, i_shortPeriod)
+longAvg  = ta.sma(close, i_longPeriod)
+
+// Draw them on the chart.
+plot(series = shortAvg, color = color.red,  title = "Short MA", linewidth = 2)
+plot(series = longAvg,  color = color.blue, title = "Long MA",  linewidth = 2)
+
+// The trade rules: go long when the short MA crosses above the long MA,
+// go short when it crosses below.
+longCondition  = ta.crossover(shortAvg, longAvg)
+shortCondition = ta.crossunder(shortAvg, longAvg)
+
+// Are we inside your trading hours right now?
+bool intradaySession = barInSession(i_marketSession)
+
+// Enter LONG (buy) on an upward cross, inside your hours.
+// We attach our alert text so the order is sent to AutoTrader Web.
+if longCondition and intradaySession
+    strategy.entry(id = "Long", direction = strategy.long, alert_message = alertMsg)
+
+// Enter SHORT (sell) on a downward cross, inside your hours.
+if shortCondition and intradaySession
+    strategy.entry(id = "Short", direction = strategy.short, alert_message = alertMsg)
+
+// Square off (close everything) once your hours are over and a trade is open.
+squareOff = (not intradaySession) and (strategy.position_size != 0)
+if squareOff
+    strategy.close_all(comment = "Square-off", alert_message = alertMsg)
