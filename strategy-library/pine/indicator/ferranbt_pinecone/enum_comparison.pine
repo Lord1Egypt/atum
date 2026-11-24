@@ -1,0 +1,30 @@
+//@version=5
+indicator("types/enum_comparison")
+// Test enum comparison
+
+enum Signal
+    buy
+    sell
+    neutral
+
+// Create enum values
+x = Signal.buy
+y = Signal.buy
+z = Signal.sell
+
+// Test equality
+same = x == y
+different = x == z
+not_same = x != z
+not_different = x != y
+
+log.info(str.tostring(same))
+log.info(str.tostring(different))
+log.info(str.tostring(not_same))
+log.info(str.tostring(not_different))
+
+// Expected output:
+// true
+// false
+// true
+// false

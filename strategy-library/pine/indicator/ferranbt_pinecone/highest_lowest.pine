@@ -1,0 +1,21 @@
+//@version=5
+indicator("ta/highest_lowest")
+// Test ta.highest and ta.lowest — the extreme VALUE over the window.
+// Like Pine, na until the window has `length` bars. Over the last 3 bars close
+// is 299, 300, 301.
+
+// Bars: 3
+
+high3 = ta.highest(close, 3)
+log.info(str.tostring(high3))
+
+low3 = ta.lowest(close, 3)
+log.info(str.tostring(low3))
+
+// Expected output:
+// NaN
+// NaN
+// NaN
+// NaN
+// 301
+// 299

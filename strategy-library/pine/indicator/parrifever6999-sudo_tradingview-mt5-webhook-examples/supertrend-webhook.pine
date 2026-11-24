@@ -1,0 +1,30 @@
+//@version=5
+// Supertrend strategy that fires TradingView webhook alerts in the SignalForge JSON format.
+// Paste this into the Pine Editor, add it to your chart, then create an alert on it
+// (Setup tab -> Webhook -> URL https://api.signalforge-ai.com/wh/YOUR_TOKEN).
+indicator("Supertrend Webhook (SignalForge)", overlay=true)
+
+atrPeriod   = input.int(10,  "ATR period")
+multiplier  = float(input.float(3.0, "ATR multiplier"))
+lotSize     = input.float(0.1, "Lot size")
+
+[supertrend, direction] = ta.supertrend(multiplier, atrPeriod)
+
+// direction: -1 = uptrend (price above supertrend), 1 = downtrend
+buySignal  = direction == -1 and direction[1] == 1
+sellSignal = direction == 1  and direction[1] == -1
+
+plot(direction == -1 ? supertrend : na, "Up trend",   color=color.new(color.lime, 0), linewidth=2)
+plot(direction == 1  ? supertrend : na, "Down trend", color=color.new(color.red, 0),  linewidth=2)
+plotshape(buySignal,  "Buy",  shape.triangleup,   location.belowbar, color.lime)
+plotshape(sellSignal, "Sell", shape.triangledown, location.abovebar, color.red)
+
+syminfo_ticker_str = syminfo.ticker
+
+if buySignal
+    msg = str.format('{"action":"buy","symbol":"{0}","lot":{1}}', syminfo_ticker_str, str.tostring(lotSize))
+    alert(msg, alert.freq_once_per_bar_close)
+
+if sellSignal
+    msg = str.format('{"action":"sell","symbol":"{0}","lot":{1}}', syminfo_ticker_str, str.tostring(lotSize))
+    alert(msg, alert.freq_once_per_bar_close)

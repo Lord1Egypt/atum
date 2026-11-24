@@ -1,0 +1,552 @@
+//@version=5
+indicator("PHASE 404 v2", shorttitle="P404", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ============================================================
+//  PHASE 404 — Smart Money Indicator v2
+//  Clean, noise-free. Inspired by PHASE 404 strategy.
+//  Shows: BSL/SSL levels, MSS (only after a liquidity grab), OTE 0.618–0.786,
+//         OB, FVG, IFVG, Breaker boxes, Kill Zones,
+//         and entry triangles when price closes inside OTE during a kill zone.
+// ============================================================
+
+// ─────────────────────────────────────────────
+// GROUP: LIQUIDITY
+// ─────────────────────────────────────────────
+grp_liq     = "💧 Liquidity"
+show_liq    = input.bool(true,  "Show BSL / SSL Lines",      group=grp_liq)
+liq_lb      = input.int(30,     "Lookback (bars)",            group=grp_liq, minval=5, maxval=200)
+bsl_col     = input.color(#00C853, "BSL Color",              group=grp_liq)
+ssl_col     = input.color(#FF1744, "SSL Color",              group=grp_liq)
+
+// ─────────────────────────────────────────────
+// GROUP: MSS
+// ─────────────────────────────────────────────
+grp_mss     = "🔄 MSS"
+show_mss    = input.bool(true,  "Show MSS Line + Label",      group=grp_mss)
+mss_len     = input.int(5,      "Swing Length",               group=grp_mss, minval=2, maxval=20)
+mss_grab_max = input.int(120,   "Max bars: liquidity grab → MSS", group=grp_mss, minval=5, maxval=500,
+     tooltip="Bull MSS only counts after SSL was swept; bear MSS only after BSL was swept, within this window.")
+mss_bull    = input.color(#00BCD4, "Bullish MSS",            group=grp_mss)
+mss_bear    = input.color(#FF5722, "Bearish MSS",            group=grp_mss)
+
+// ─────────────────────────────────────────────
+// GROUP: OTE
+// ─────────────────────────────────────────────
+grp_ote     = "🎯 OTE Zone"
+show_ote    = input.bool(true,  "Show OTE Zone",              group=grp_ote)
+ote_ext     = input.int(40,     "Extend Bars",                group=grp_ote, minval=5, maxval=150)
+show_fibs   = input.bool(true,  "Show Fib Levels (0.5 / 0.618 / 0.786)", group=grp_ote)
+ote_bull_bg = input.color(color.new(#00E676, 82), "Bullish OTE Fill", group=grp_ote)
+ote_bear_bg = input.color(color.new(#FF1744, 82), "Bearish OTE Fill", group=grp_ote)
+fib_col     = input.color(color.new(#FFD600, 20), "Fib Level Color",  group=grp_ote)
+eq_col      = input.color(color.new(#FFD600, 0),  "EQ (0.5) Color",   group=grp_ote)
+
+// ─────────────────────────────────────────────
+// GROUP: ORDER BLOCKS
+// ─────────────────────────────────────────────
+grp_ob      = "📦 Order Blocks"
+show_ob     = input.bool(true, "Show Order Blocks",           group=grp_ob)
+ob_ext      = input.int(40,    "Extend Bars",                 group=grp_ob, minval=5, maxval=100)
+ob_bull_bg  = input.color(color.new(#00C853, 78), "Bullish OB", group=grp_ob)
+ob_bear_bg  = input.color(color.new(#D50000, 78), "Bearish OB", group=grp_ob)
+ob_max      = input.int(3,     "Max OBs",                    group=grp_ob, minval=1, maxval=8)
+
+// ─────────────────────────────────────────────
+// GROUP: FVG
+// ─────────────────────────────────────────────
+grp_fvg     = "⚡ Fair Value Gaps"
+show_fvg    = input.bool(true, "Show FVGs",                  group=grp_fvg)
+fvg_ext     = input.int(40,    "Extend Bars",                group=grp_fvg, minval=5, maxval=100)
+fvg_bull_bg = input.color(color.new(#00BFA5, 82), "Bullish FVG", group=grp_fvg)
+fvg_bear_bg = input.color(color.new(#FF6D00, 82), "Bearish FVG", group=grp_fvg)
+fvg_max     = input.int(3,     "Max FVGs",                   group=grp_fvg, minval=1, maxval=8)
+
+// ─────────────────────────────────────────────
+// GROUP: IFVG
+// ─────────────────────────────────────────────
+grp_ifvg    = "🔁 Inversed FVGs"
+show_ifvg   = input.bool(true, "Show IFVGs",                 group=grp_ifvg)
+ifvg_ext    = input.int(40,    "Extend Bars",                group=grp_ifvg, minval=5, maxval=100)
+ifvg_bull_bg= input.color(color.new(#76FF03, 82), "Bullish IFVG", group=grp_ifvg)
+ifvg_bear_bg= input.color(color.new(#FF4081, 82), "Bearish IFVG", group=grp_ifvg)
+ifvg_max    = input.int(2,     "Max IFVGs",                  group=grp_ifvg, minval=1, maxval=8)
+
+// ─────────────────────────────────────────────
+// GROUP: BREAKER BLOCKS
+// ─────────────────────────────────────────────
+grp_bb      = "💥 Breaker Blocks"
+show_bb     = input.bool(true, "Show Breakers",              group=grp_bb)
+bb_ext      = input.int(40,    "Extend Bars",                group=grp_bb, minval=5, maxval=100)
+bb_bull_bg  = input.color(color.new(#64FFDA, 82), "Bullish Breaker", group=grp_bb)
+bb_bear_bg  = input.color(color.new(#FF6E40, 82), "Bearish Breaker", group=grp_bb)
+bb_max      = input.int(2,     "Max Breakers",               group=grp_bb, minval=1, maxval=8)
+
+// ─────────────────────────────────────────────
+// GROUP: KILL ZONES
+// ─────────────────────────────────────────────
+grp_kz      = "⏰ Kill Zones"
+show_kz     = input.bool(true,  "Show Kill Zones",           group=grp_kz)
+kz_london   = input.bool(true,  "London (02–05 NY)",         group=grp_kz)
+kz_ny       = input.bool(true,  "NY Open (07–10 NY)",        group=grp_kz)
+kz_lon_col  = input.color(color.new(#1565C0, 88), "London", group=grp_kz)
+kz_ny_col   = input.color(color.new(#4A148C, 88), "NY",     group=grp_kz)
+kz_tz       = input.string("America/New_York", "Timezone",   group=grp_kz)
+
+// ─────────────────────────────────────────────
+// GROUP: ENTRY SIGNAL
+// ─────────────────────────────────────────────
+grp_sig     = "🚦 Entry Signal"
+show_sig    = input.bool(true, "Show Entry Signal",          group=grp_sig)
+entry_require_kz = input.bool(false, "Require kill zone for entry", group=grp_sig,
+     tooltip="On: only London/NY. Off (default): OTE pullback can signal any session — avoids missing good entries outside KZ.")
+ote_slack_ticks = input.int(2, "OTE band slack (ticks)", group=grp_sig, minval=0, maxval=50,
+     tooltip="Widens the OTE band slightly for overlap tests (price vs mintick).")
+sig_bull    = input.color(#00E676, "Long Signal Color",      group=grp_sig)
+sig_bear    = input.color(#FF1744, "Short Signal Color",     group=grp_sig)
+
+// ============================================================
+// HELPERS
+// ============================================================
+pip = syminfo.mintick * (str.contains(syminfo.ticker, "JPY") ? 100 : (syminfo.mintick < 0.001 ? 10 : 10))
+
+ph(len) => ta.pivothigh(high, len, len)
+pl(len) => ta.pivotlow(low,   len, len)
+
+isBull = close > open
+isBear = close < open
+
+// ============================================================
+// SECTION 1 — LIQUIDITY LEVELS (BSL / SSL)
+// Clean dashed lines only. No X markers, no sweep labels.
+// ============================================================
+var float bslPrice = na
+var float sslPrice = na
+var int   bslIdx   = na
+var int   sslIdx   = na
+
+// Detect swing pivot levels
+_ph = ph(liq_lb / 3)
+_pl = pl(liq_lb / 3)
+
+if not na(_ph)
+    bslPrice := _ph
+    bslIdx   := bar_index - liq_lb / 3
+
+if not na(_pl)
+    sslPrice := _pl
+    sslIdx   := bar_index - liq_lb / 3
+
+// Draw lines — extend right to current bar
+var line bsl_line = na
+var line ssl_line = na
+var label bsl_lbl = na
+var label ssl_lbl = na
+
+if show_liq and not na(bslPrice) and barstate.islast
+    if not na(bsl_line)
+        line.delete(bsl_line)
+    if not na(bsl_lbl)
+        label.delete(bsl_lbl)
+    bsl_line := line.new(bslIdx, bslPrice, bar_index + 10, bslPrice,
+         color=bsl_col, style=line.style_dashed, width=1)
+    bsl_lbl  := label.new(bar_index + 10, bslPrice, "BSL",
+         style=label.style_label_left, color=color.new(bsl_col, 70),
+         textcolor=bsl_col, size=size.tiny)
+
+if show_liq and not na(sslPrice) and barstate.islast
+    if not na(ssl_line)
+        line.delete(ssl_line)
+    if not na(ssl_lbl)
+        label.delete(ssl_lbl)
+    ssl_line := line.new(sslIdx, sslPrice, bar_index + 10, sslPrice,
+         color=ssl_col, style=line.style_dashed, width=1)
+    ssl_lbl  := label.new(bar_index + 10, sslPrice, "SSL",
+         style=label.style_label_left, color=color.new(ssl_col, 70),
+         textcolor=ssl_col, size=size.tiny)
+
+// ── Silent sweep detection (used for entry logic only, no visual noise) ──
+bsl_swept = not na(bslPrice) and high > bslPrice and close < bslPrice
+ssl_swept = not na(sslPrice) and low  < sslPrice and close > sslPrice
+
+var int last_bsl_grab_bi = na
+var int last_ssl_grab_bi = na
+if bsl_swept
+    last_bsl_grab_bi := bar_index
+if ssl_swept
+    last_ssl_grab_bi := bar_index
+
+// ============================================================
+// SECTION 2 — MSS
+// One clean horizontal line at the break level + small label.
+// Valid MSS: structural break only after the matching liquidity side was grabbed (playbook order).
+// ============================================================
+var float mss_high_ref = na
+var float mss_low_ref  = na
+
+_mph = ph(mss_len)
+_mpl = pl(mss_len)
+
+if not na(_mph)
+    mss_high_ref := _mph
+if not na(_mpl)
+    mss_low_ref := _mpl
+
+bull_mss_struct = show_mss and not na(mss_high_ref) and
+     close > mss_high_ref and close[1] <= mss_high_ref
+
+bear_mss_struct = show_mss and not na(mss_low_ref) and
+     close < mss_low_ref  and close[1] >= mss_low_ref
+
+bars_since_ssl_grab = not na(last_ssl_grab_bi) ? bar_index - last_ssl_grab_bi : 100000000
+bars_since_bsl_grab = not na(last_bsl_grab_bi) ? bar_index - last_bsl_grab_bi : 100000000
+
+bull_mss_valid = bull_mss_struct and not na(last_ssl_grab_bi) and last_ssl_grab_bi < bar_index and
+     bars_since_ssl_grab <= mss_grab_max
+bear_mss_valid = bear_mss_struct and not na(last_bsl_grab_bi) and last_bsl_grab_bi < bar_index and
+     bars_since_bsl_grab <= mss_grab_max
+
+// Draw MSS: one line + one label per event (not on every bar)
+if bull_mss_valid
+    line.new(bar_index - mss_len, mss_high_ref, bar_index + 5, mss_high_ref,
+         color=mss_bull, width=2, style=line.style_solid)
+    label.new(bar_index, high[1], "MSS ▲",
+         style=label.style_label_down, size=size.small,
+         color=color.new(mss_bull, 25), textcolor=color.white)
+
+if bear_mss_valid
+    line.new(bar_index - mss_len, mss_low_ref, bar_index + 5, mss_low_ref,
+         color=mss_bear, width=2, style=line.style_solid)
+    label.new(bar_index, low[1], "MSS ▼",
+         style=label.style_label_up, size=size.small,
+         color=color.new(mss_bear, 25), textcolor=color.white)
+
+// ============================================================
+// SECTION 3 — OTE ZONE
+// Clean box from 0.618 to 0.786 with dotted fib lines inside.
+// Matches image 2 and image 3 aesthetic.
+// Pending uses [1]: first MSS bar after grab updates OTE; a 2nd MSS during pullback does not overwrite the band.
+// ============================================================
+var box   ote_box    = na
+var line  ote_eq     = na
+var line  ote_618    = na
+var line  ote_786    = na
+var label ote_lbl    = na
+var label lbl_786    = na
+var label lbl_618    = na
+var label lbl_eq     = na
+var bool  ote_bull_pending = false
+var bool  ote_bear_pending = false
+var float ote_top_active = na
+var float ote_bot_active = na
+var bool  ote_is_bull    = false
+
+// Active OTE levels for entry (same bar as first MSS only — not on a 2nd MSS while pullback pending)
+if bull_mss_valid and not na(sslPrice) and not ote_bull_pending[1]
+    r = close - sslPrice
+    ote_top_active := close - r * 0.618
+    ote_bot_active := close - r * 0.786
+    ote_is_bull := true
+    ote_bull_pending := true
+    ote_bear_pending := false
+
+if bear_mss_valid and not na(bslPrice) and not ote_bear_pending[1]
+    r = bslPrice - close
+    ote_top_active := close + r * 0.786
+    ote_bot_active := close + r * 0.618
+    ote_is_bull := false
+    ote_bear_pending := true
+    ote_bull_pending := false
+
+// Bullish OTE: drawn after valid bull MSS (grab → then break), from SSL to MSS
+if bull_mss_valid and not na(sslPrice) and not ote_bull_pending[1]
+    r        = close - sslPrice
+    lvl_618  = close - r * 0.618
+    lvl_786  = close - r * 0.786
+    lvl_50   = close - r * 0.500
+
+    if not na(ote_box)
+        box.delete(ote_box)
+    if not na(ote_eq)
+        line.delete(ote_eq)
+    if not na(ote_618)
+        line.delete(ote_618)
+    if not na(ote_786)
+        line.delete(ote_786)
+    if not na(ote_lbl)
+        label.delete(ote_lbl)
+    if not na(lbl_786)
+        label.delete(lbl_786)
+    if not na(lbl_618)
+        label.delete(lbl_618)
+    if not na(lbl_eq)
+        label.delete(lbl_eq)
+
+    if show_ote
+        ote_box := box.new(bar_index, lvl_618, bar_index + ote_ext, lvl_786,
+             bgcolor=ote_bull_bg,
+             border_color=color.new(#00E676, 60), border_width=1)
+
+        if show_fibs
+            ote_618 := line.new(bar_index, lvl_618, bar_index + ote_ext, lvl_618,
+                 color=fib_col, style=line.style_dotted, width=1)
+            ote_786 := line.new(bar_index, lvl_786, bar_index + ote_ext, lvl_786,
+                 color=fib_col, style=line.style_dotted, width=1)
+            ote_eq  := line.new(bar_index, lvl_50,  bar_index + ote_ext, lvl_50,
+                 color=eq_col,  style=line.style_dotted, width=1)
+            lbl_618 := label.new(bar_index + ote_ext, lvl_618, "0.618",
+                 style=label.style_label_left, color=color.new(#FFD600,80),
+                 textcolor=#FFD600, size=size.tiny)
+            lbl_786 := label.new(bar_index + ote_ext, lvl_786, "0.786",
+                 style=label.style_label_left, color=color.new(#FFD600,80),
+                 textcolor=#FFD600, size=size.tiny)
+            lbl_eq  := label.new(bar_index + ote_ext, lvl_50,  "EQ 0.5",
+                 style=label.style_label_left, color=color.new(#FFD600,80),
+                 textcolor=#FFD600, size=size.tiny)
+        ote_lbl := label.new(bar_index + 2, lvl_618, "OTE",
+             style=label.style_label_right, color=color.new(#00E676, 50),
+             textcolor=color.white, size=size.small)
+
+// Bearish OTE: drawn after valid bear MSS (grab → then break), from BSL to MSS
+if bear_mss_valid and not na(bslPrice) and not ote_bear_pending[1]
+    r        = bslPrice - close
+    lvl_618  = close + r * 0.618
+    lvl_786  = close + r * 0.786
+    lvl_50   = close + r * 0.500
+
+    if not na(ote_box)
+        box.delete(ote_box)
+    if not na(ote_eq)
+        line.delete(ote_eq)
+    if not na(ote_618)
+        line.delete(ote_618)
+    if not na(ote_786)
+        line.delete(ote_786)
+    if not na(ote_lbl)
+        label.delete(ote_lbl)
+    if not na(lbl_786)
+        label.delete(lbl_786)
+    if not na(lbl_618)
+        label.delete(lbl_618)
+    if not na(lbl_eq)
+        label.delete(lbl_eq)
+
+    if show_ote
+        ote_box := box.new(bar_index, lvl_786, bar_index + ote_ext, lvl_618,
+             bgcolor=ote_bear_bg,
+             border_color=color.new(#FF1744, 60), border_width=1)
+
+        if show_fibs
+            ote_618 := line.new(bar_index, lvl_618, bar_index + ote_ext, lvl_618,
+                 color=fib_col, style=line.style_dotted, width=1)
+            ote_786 := line.new(bar_index, lvl_786, bar_index + ote_ext, lvl_786,
+                 color=fib_col, style=line.style_dotted, width=1)
+            ote_eq  := line.new(bar_index, lvl_50,  bar_index + ote_ext, lvl_50,
+                 color=eq_col,  style=line.style_dotted, width=1)
+            lbl_618 := label.new(bar_index + ote_ext, lvl_618, "0.618",
+                 style=label.style_label_left, color=color.new(#FFD600,80),
+                 textcolor=#FFD600, size=size.tiny)
+            lbl_786 := label.new(bar_index + ote_ext, lvl_786, "0.786",
+                 style=label.style_label_left, color=color.new(#FFD600,80),
+                 textcolor=#FFD600, size=size.tiny)
+            lbl_eq  := label.new(bar_index + ote_ext, lvl_50,  "EQ 0.5",
+                 style=label.style_label_left, color=color.new(#FFD600,80),
+                 textcolor=#FFD600, size=size.tiny)
+        ote_lbl := label.new(bar_index + 2, lvl_618, "OTE",
+             style=label.style_label_right, color=color.new(#FF1744, 50),
+             textcolor=color.white, size=size.small)
+
+// ============================================================
+// SECTION 4 — ORDER BLOCKS
+// Clean semi-transparent boxes. Small "OB" label only.
+// ============================================================
+var int ob_bull_ct = 0
+var int ob_bear_ct = 0
+
+bull_ob = show_ob and isBear[1] and close > high[1]
+bear_ob = show_ob and isBull[1] and close < low[1]
+
+if bull_ob and ob_bull_ct < ob_max
+    box.new(bar_index - 1, high[1], bar_index + ob_ext, low[1],
+         bgcolor=ob_bull_bg, border_color=color.new(#00C853, 50), border_width=1)
+    label.new(bar_index, high[1], "OB",
+         style=label.style_label_down, size=size.tiny,
+         color=color.new(#00C853, 55), textcolor=color.white)
+    ob_bull_ct += 1
+
+if bear_ob and ob_bear_ct < ob_max
+    box.new(bar_index - 1, high[1], bar_index + ob_ext, low[1],
+         bgcolor=ob_bear_bg, border_color=color.new(#D50000, 50), border_width=1)
+    label.new(bar_index, low[1], "OB",
+         style=label.style_label_up, size=size.tiny,
+         color=color.new(#D50000, 55), textcolor=color.white)
+    ob_bear_ct += 1
+
+if bar_index % 80 == 0
+    ob_bull_ct := 0
+    ob_bear_ct := 0
+
+// ============================================================
+// SECTION 5 — FAIR VALUE GAPS
+// 3-candle imbalance. Clean box, small "FVG" label only.
+// ============================================================
+var int fvg_bull_ct = 0
+var int fvg_bear_ct = 0
+
+bull_fvg_raw = show_fvg and low > high[2]
+bear_fvg_raw = show_fvg and high < low[2]
+
+if bull_fvg_raw and fvg_bull_ct < fvg_max
+    box.new(bar_index - 2, low, bar_index + fvg_ext, high[2],
+         bgcolor=fvg_bull_bg, border_color=color.new(#00BFA5, 55), border_width=1)
+    label.new(bar_index - 1, math.avg(low, high[2]), "FVG",
+         style=label.style_label_right, size=size.tiny,
+         color=color.new(#00BFA5, 55), textcolor=color.white)
+    fvg_bull_ct += 1
+
+if bear_fvg_raw and fvg_bear_ct < fvg_max
+    box.new(bar_index - 2, low[2], bar_index + fvg_ext, high,
+         bgcolor=fvg_bear_bg, border_color=color.new(#FF6D00, 55), border_width=1)
+    label.new(bar_index - 1, math.avg(low[2], high), "FVG",
+         style=label.style_label_right, size=size.tiny,
+         color=color.new(#FF6D00, 55), textcolor=color.white)
+    fvg_bear_ct += 1
+
+if bar_index % 80 == 0
+    fvg_bull_ct := 0
+    fvg_bear_ct := 0
+
+// ============================================================
+// SECTION 6 — INVERSED FVGs
+// Partial FVG fill that flips to S/R.
+// ============================================================
+var int ifvg_bull_ct = 0
+var int ifvg_bear_ct = 0
+
+// Bullish IFVG: a bullish FVG existed 2 bars back, price entered but closed above bottom
+bull_ifvg_raw = show_ifvg and low[2] > high[4] and
+  low[1] <= low[2] and close[1] > high[4]
+
+// Bearish IFVG: a bearish FVG existed 2 bars back, price entered but closed below top
+bear_ifvg_raw = show_ifvg and high[2] < low[4] and
+  high[1] >= high[2] and close[1] < low[4]
+
+if bull_ifvg_raw and ifvg_bull_ct < ifvg_max
+    box.new(bar_index - 3, low[2], bar_index + ifvg_ext, high[4],
+         bgcolor=ifvg_bull_bg, border_color=color.new(#76FF03, 50), border_width=1)
+    label.new(bar_index - 2, math.avg(low[2], high[4]), "IFVG",
+         style=label.style_label_right, size=size.tiny,
+         color=color.new(#76FF03, 55), textcolor=color.white)
+    ifvg_bull_ct += 1
+
+if bear_ifvg_raw and ifvg_bear_ct < ifvg_max
+    box.new(bar_index - 3, low[4], bar_index + ifvg_ext, high[2],
+         bgcolor=ifvg_bear_bg, border_color=color.new(#FF4081, 50), border_width=1)
+    label.new(bar_index - 2, math.avg(low[4], high[2]), "IFVG",
+         style=label.style_label_right, size=size.tiny,
+         color=color.new(#FF4081, 55), textcolor=color.white)
+    ifvg_bear_ct += 1
+
+if bar_index % 80 == 0
+    ifvg_bull_ct := 0
+    ifvg_bear_ct := 0
+
+// ============================================================
+// SECTION 7 — BREAKER BLOCKS
+// Invalidated OB that flips role. "BRK" label only.
+// ============================================================
+var int bb_bull_ct = 0
+var int bb_bear_ct = 0
+
+bull_brk = show_bb and isBull and close[2] < open[2] and
+           close > high[2] and close[1] > open[2]
+bear_brk = show_bb and isBear and close[2] > open[2] and
+           close < low[2]  and close[1] < open[2]
+
+if bull_brk and bb_bull_ct < bb_max
+    box.new(bar_index - 2, high[2], bar_index + bb_ext, low[2],
+         bgcolor=bb_bull_bg, border_color=color.new(#64FFDA, 50), border_width=1)
+    label.new(bar_index - 1, math.avg(high[2], low[2]), "BRK",
+         style=label.style_label_right, size=size.tiny,
+         color=color.new(#64FFDA, 55), textcolor=color.black)
+    bb_bull_ct += 1
+
+if bear_brk and bb_bear_ct < bb_max
+    box.new(bar_index - 2, high[2], bar_index + bb_ext, low[2],
+         bgcolor=bb_bear_bg, border_color=color.new(#FF6E40, 50), border_width=1)
+    label.new(bar_index - 1, math.avg(high[2], low[2]), "BRK",
+         style=label.style_label_right, size=size.tiny,
+         color=color.new(#FF6E40, 55), textcolor=color.white)
+    bb_bear_ct += 1
+
+if bar_index % 80 == 0
+    bb_bull_ct := 0
+    bb_bear_ct := 0
+
+// ============================================================
+// SECTION 8 — KILL ZONES
+// Subtle background shading only. Label fires ONCE at open.
+// ============================================================
+kz_hr = hour(time, kz_tz)
+
+in_london = show_kz and kz_london and kz_hr >= 2 and kz_hr < 5
+in_ny     = show_kz and kz_ny     and kz_hr >= 7 and kz_hr < 10
+
+bgcolor(in_london ? kz_lon_col : na, title="London KZ")
+bgcolor(in_ny     ? kz_ny_col  : na, title="NY KZ")
+
+// One label at the START of each kill zone session only
+if in_london and not in_london[1]
+    label.new(bar_index, low, "London",
+         style=label.style_label_up, size=size.tiny,
+         color=color.new(#1565C0, 55), textcolor=color.white)
+
+if in_ny and not in_ny[1]
+    label.new(bar_index, low, "NY Open",
+         style=label.style_label_up, size=size.tiny,
+         color=color.new(#4A148C, 55), textcolor=color.white)
+
+// ============================================================
+// SECTION 9 — ENTRY SIGNAL
+// Entry = bar overlaps OTE 0.618–0.786 band + confirming candle. Optional KZ filter.
+// Overlap (not "close must stay inside") catches wick entries that close slightly past 0.786.
+// ============================================================
+in_kz = in_london or in_ny
+kz_ok_for_entry = not entry_require_kz or in_kz
+
+ote_slack = ote_slack_ticks * syminfo.mintick
+// Bar overlaps OTE band (any touch counts); slack widens the band slightly vs mintick
+in_ote_bull = not na(ote_top_active) and ote_is_bull and low <= ote_top_active + ote_slack and high >= ote_bot_active - ote_slack
+
+in_ote_bear = not na(ote_top_active) and not ote_is_bull and high >= ote_bot_active - ote_slack and low <= ote_top_active + ote_slack
+
+long_signal  = show_sig and in_ote_bull and isBull and kz_ok_for_entry
+short_signal = show_sig and in_ote_bear and isBear and kz_ok_for_entry
+
+// Triangle plotshape — clean, no text clutter
+plotshape(long_signal,  "LONG",  shape.triangleup,   location.belowbar,
+     color=sig_bull, size=size.small)
+plotshape(short_signal, "SHORT", shape.triangledown,  location.abovebar,
+     color=sig_bear, size=size.small)
+
+// Single label per signal; clear OTE lock so the next MSS can arm a fresh zone
+if long_signal
+    ote_bull_pending := false
+    label.new(bar_index, low, "LONG",
+         style=label.style_label_up,
+         color=color.new(sig_bull, 15), textcolor=color.white, size=size.small)
+
+if short_signal
+    ote_bear_pending := false
+    label.new(bar_index, high, "SHORT",
+         style=label.style_label_down,
+         color=color.new(sig_bear, 15), textcolor=color.white, size=size.small)
+
+// ============================================================
+// SECTION 10 — ALERTS
+// ============================================================
+alertcondition(bull_mss_valid, "P404: Bullish MSS (after SSL grab)", "Valid bull MSS — SSL grabbed first")
+alertcondition(bear_mss_valid, "P404: Bearish MSS (after BSL grab)", "Valid bear MSS — BSL grabbed first")
+alertcondition(long_signal,  "P404: LONG  🟢",      "LONG — OTE overlap + bull close (optional KZ)")
+alertcondition(short_signal, "P404: SHORT 🔴",      "SHORT — OTE overlap + bear close (optional KZ)")
+alertcondition(bull_fvg_raw, "P404: Bullish FVG",   "Bullish FVG formed")
+alertcondition(bear_fvg_raw, "P404: Bearish FVG",   "Bearish FVG formed")

@@ -1,0 +1,224 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © {{SHORTTITLE}}
+
+//@version=6
+indicator(
+     "{{TITLE}}", shorttitle="{{SHORTTITLE}}", overlay={{OVERLAY}},
+     max_labels_count=500
+     )
+
+// Starting point for a new indicator. Replace the moving-average calculation
+// with your own idea; the theme system, dashboard and test block are generic.
+//
+// The dashboard rebuilds inside `if barstate.islast`, which runs on every
+// realtime tick — so it tracks price live. Keep anything expensive out of that
+// block, or gate it behind a change check (references/performance-guide.md).
+
+// ————— Constants
+string THEME_DARK   = "Dark"
+string THEME_LIGHT  = "Light"
+string THEME_AUTO   = "Auto"
+string THEME_CUSTOM = "Custom"
+
+// Dark palette (TradingView official chart colors)
+color  BULL_DARK    = #089981
+color  BEAR_DARK    = #f23645
+// Light palette (deeper tones needed on white)
+color  BULL_LIGHT   = #00796b
+color  BEAR_LIGHT   = #c62828
+// Neutral palette
+color  NEUTRAL_DARK  = #b2b5be
+color  NEUTRAL_LIGHT = #4a4e58
+
+// ————— Inputs
+// Every input carries a tooltip. That is not politeness: the settings dialog is
+// the only documentation most users will ever read, and an input whose effect
+// has to be guessed gets left on its default forever. Say what it CHANGES, not
+// what it is called.
+int    lengthInput        = input.int(
+     14, "Length", minval=1, maxval=2000, group="Settings",
+     tooltip="Lookback in bars. Higher is smoother and slower to react; lower " +
+     "reacts sooner and gives more false turns.")
+float  sourceInput        = input.source(
+     close, "Source", group="Settings",
+     tooltip="Which price each bar contributes. close is the convention; hlc3 " +
+     "is steadier on noisy symbols.")
+string themeInput         = input.string(
+     THEME_DARK, "Theme", options=[THEME_DARK, THEME_LIGHT, THEME_AUTO, THEME_CUSTOM],
+     group="Appearance",
+     tooltip="Dark/Light: fixed palettes. Auto: reads the chart background and " +
+     "picks automatically. Custom: use the color pickers below.")
+color  customBullInput    = input.color(
+     #089981, "↑ Custom Bull", group="Appearance", inline="custom",
+     tooltip="Only used when Theme = Custom. The bullish/positive accent color.")
+color  customBearInput    = input.color(
+     #f23645, "↓ Custom Bear", group="Appearance", inline="custom",
+     tooltip="Only used when Theme = Custom. The bearish/negative accent color.")
+bool   showDashboardInput = input.bool(
+     true, "Show Dashboard", group="Appearance",
+     tooltip="Hides the panel without disabling any calculation.")
+string tablePosInput      = input.string(
+     "Top Right", "Dashboard Position",
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group="Appearance",
+     tooltip="Move the panel when it covers price, or when a second script has " +
+     "already taken this corner.")
+int    panelTranspInput   = input.int(
+     15, "Dashboard Transparency", minval=0, maxval=90, group="Appearance",
+     tooltip="0 is opaque. Past about 60 the candles behind the panel start " +
+     "winning and the numbers stop being readable.")
+bool   testModeInput      = input.bool(
+     false, "Test Mode", group="Debug/Test",
+     tooltip="Runs the in-script assertions and shows their pass/fail counts. " +
+     "Leave OFF when publishing — the release bundle blocks on it.")
+
+// ————— Function declarations
+
+// @function Returns true when the chart background is closer to white than black.
+// Uses a simple luminance proxy (R*0.299 + G*0.587 + B*0.114).
+_isLightChart() =>
+    r   = color.r(chart.bg_color)
+    g   = color.g(chart.bg_color)
+    b   = color.b(chart.bg_color)
+    r * 0.299 + g * 0.587 + b * 0.114 > 128.0
+
+// @function Returns the bullish accent color for the selected theme.
+// Supports Dark, Light, Auto (reads chart background), and Custom (user picker).
+getBullColor(string theme) =>
+    switch theme
+        THEME_LIGHT  => BULL_LIGHT
+        THEME_AUTO   => _isLightChart() ? BULL_LIGHT : BULL_DARK
+        THEME_CUSTOM => customBullInput
+        =>             BULL_DARK
+
+// @function Returns the bearish accent color for the selected theme.
+// Supports Dark, Light, Auto (reads chart background), and Custom (user picker).
+getBearColor(string theme) =>
+    switch theme
+        THEME_LIGHT  => BEAR_LIGHT
+        THEME_AUTO   => _isLightChart() ? BEAR_LIGHT : BEAR_DARK
+        THEME_CUSTOM => customBearInput
+        =>             BEAR_DARK
+
+// @function Primary text color — the value column reads first.
+// library-sync-exempt: this variant supports a third theme, THEME_AUTO, which
+// follows the chart's own light/dark setting. The library has only two, because
+// a published library cannot read the chart it is imported into.
+getTextColor(string theme) =>
+    switch theme
+        THEME_LIGHT => #131722
+        THEME_AUTO  => _isLightChart() ? #131722 : #d1d4dc
+        =>             #d1d4dc
+
+// @function Secondary text color — deliberately lower contrast than the value.
+// library-sync-exempt: this variant supports a third theme, THEME_AUTO, which
+// follows the chart's own light/dark setting. The library has only two, because
+// a published library cannot read the chart it is imported into.
+getMutedColor(string theme) =>
+    switch theme
+        THEME_LIGHT => NEUTRAL_LIGHT
+        THEME_AUTO  => _isLightChart() ? NEUTRAL_LIGHT : NEUTRAL_DARK
+        =>             NEUTRAL_DARK
+
+// @function Panel background for the selected theme.
+// library-sync-exempt: this variant supports a third theme, THEME_AUTO, which
+// follows the chart's own light/dark setting. The library has only two, because
+// a published library cannot read the chart it is imported into.
+getPanelColor(string theme, int transp) =>
+    color base = switch theme
+        THEME_LIGHT => #ffffff
+        THEME_AUTO  => _isLightChart() ? #ffffff : #131722
+        =>             #131722
+    color.new(base, transp)
+
+// @function Maps a position-name string to the matching position.* constant.
+tablePosFrom(string name) =>
+    switch name
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        =>               position.top_right
+
+// @function One label/value dashboard row. Taking both colors as arguments is
+// what stops a cell shipping without text_color — Pine defaults cell text to
+// BLACK, which is invisible on a dark panel.
+dashRow(table t, int row, string label, string value, color labelCol, color valueCol) =>
+    table.cell(t, 0, row, label, text_color=labelCol, text_size=size.small,
+         text_halign=text.align_left)
+    table.cell(t, 1, row, value, text_color=valueCol, text_size=size.small,
+         text_halign=text.align_right)
+
+// ————— Calculations
+color bullColor  = getBullColor(themeInput)
+color bearColor  = getBearColor(themeInput)
+color textColor  = getTextColor(themeInput)
+color mutedColor = getMutedColor(themeInput)
+float maValue    = ta.sma(sourceInput, lengthInput)
+bool  trendUp    = sourceInput > maValue
+// Hoisted out of the assertions below: a ta.* call placed after an and/or is
+// skipped by v6's lazy evaluation on some bars, which corrupts its state.
+float srcLowest  = ta.lowest(sourceInput, lengthInput)
+float srcHighest = ta.highest(sourceInput, lengthInput)
+
+// Example: Gradient coloring for visual polish
+float rsiValue = ta.rsi(sourceInput, 14)
+color gradientColor = color.from_gradient(rsiValue, 30, 70, bearColor, bullColor)
+
+// Note: For dynamic bull/bear zone fills, see references/snippets/zone_fill.pine.
+// Note: For heavy calculation caching on realtime bars, see references/performance-guide.md.
+
+// ————— Visuals
+// Use display.pane to keep the status line clean for plots that are just visual aids
+plot(maValue, "MA", color=gradientColor, linewidth=2, display=display.pane)
+// Example of a hidden series used only for external referencing
+plot(rsiValue, "RSI (Hidden)", display=display.none)
+
+var table dashboard = table.new(
+     tablePosFrom(tablePosInput), 2, 3,
+     bgcolor=getPanelColor(themeInput, panelTranspInput),
+     border_color=getPanelColor(themeInput, 100), border_width=1,
+     frame_color=color.new(mutedColor, 70), frame_width=1)
+
+if showDashboardInput and barstate.islast
+    table.cell(dashboard, 0, 0, "{{SHORTTITLE}}", text_color=textColor,
+         text_size=size.normal, text_halign=text.align_center)
+    table.cell(dashboard, 1, 0, "", text_color=textColor)
+    table.merge_cells(dashboard, 0, 0, 1, 0)
+    dashRow(dashboard, 1, "Trend", trendUp ? "Bullish" : "Bearish",
+         mutedColor, trendUp ? bullColor : bearColor)
+    dashRow(dashboard, 2, "MA", str.tostring(maValue, format.mintick), mutedColor, textColor)
+
+// ————— Alerts
+alertcondition(ta.cross(sourceInput, maValue), "Source crossed MA", "Source crossed the moving average")
+
+// ————— Debug / Test block (keep testModeInput false when handing off)
+int TEST_COUNT = 2      // keep in sync with the assertFailed() calls below
+var int passCount = 0
+var int failCount = 0
+
+// @function Draws a failure marker and RETURNS 1 on failure, 0 on pass.
+// Pine forbids a function from modifying a global (CE10088), so the counting
+// happens at the call site. Drawing only on failure keeps a long history from
+// spending the whole 500-label budget on passing bars.
+assertFailed(bool condition, string description) =>
+    if not condition
+        label.new(bar_index, high, "FAIL: " + description, color=bearColor,
+             textcolor=color.white, style=label.style_label_down, size=size.small)
+    condition ? 0 : 1
+
+if testModeInput
+    int fails = 0
+    // 1. The average must be defined once past its warm-up period.
+    fails += assertFailed(bar_index <= lengthInput or not na(maValue), "maValue is na past warm-up")
+    // 2. An average of a positive series can never fall outside its range.
+    fails += assertFailed(
+         na(maValue) or (maValue >= srcLowest and maValue <= srcHighest),
+         "maValue outside the source range")
+    failCount += fails
+    passCount += TEST_COUNT - fails
+
+var table testTable = table.new(position.bottom_left, 2, 2, border_width=1,
+     bgcolor=getPanelColor(themeInput, panelTranspInput))
+if testModeInput and barstate.islast
+    dashRow(testTable, 0, "Passed", str.tostring(passCount), mutedColor, bullColor)
+    dashRow(testTable, 1, "Failed", str.tostring(failCount), mutedColor,
+         failCount > 0 ? bearColor : bullColor)

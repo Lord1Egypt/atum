@@ -1,0 +1,13 @@
+//@version=5
+indicator("constants/text")
+// text.* constants resolve to their string tag.
+log.info(str.tostring(text.align_left))
+log.info(str.tostring(text.align_center))
+log.info(str.tostring(text.align_right))
+log.info(str.tostring(text.wrap_auto))
+
+// Expected output:
+// align_left
+// align_center
+// align_right
+// wrap_auto

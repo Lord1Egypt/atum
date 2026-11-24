@@ -1,0 +1,36 @@
+//@version=6
+// London open range breakout with an ATR stop and an R-multiple target.
+// Range = last 28 bars (about 00:00-07:00 London on a 15-minute chart).
+// Trades a close outside the range between 07:00 and 10:00 London time.
+// Backtested results on gold, GBP/USD and EUR/USD: https://wickcheck.com/blog/london-breakout-gold/
+strategy("London open range breakout, ATR stop, R target", overlay = true, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, commission_type = strategy.commission.percent, commission_value = 0.01, slippage = 2)
+
+rangeBars = input.int(28, "Range length (bars)", minval = 2)
+startH    = input.int(7, "Window start hour (London)", minval = 0, maxval = 23)
+endH      = input.int(10, "Window end hour (London)", minval = 1, maxval = 24)
+atrMult   = input.float(1.5, "Stop distance (x ATR)", step = 0.25)
+rr        = input.float(2.0, "Target (R)", step = 0.5)
+
+h     = hour(time, "Europe/London")
+inWin = h >= startH and h < endH
+hi    = ta.highest(high, rangeBars)[1]
+lo    = ta.lowest(low, rangeBars)[1]
+atr   = ta.atr(14)
+
+var float sd = na
+if inWin and strategy.position_size == 0
+    if close > hi
+        sd := atrMult * atr
+        strategy.entry("Long", strategy.long)
+    else if close < lo
+        sd := atrMult * atr
+        strategy.entry("Short", strategy.short)
+
+ep = strategy.position_avg_price
+if strategy.position_size > 0
+    strategy.exit("L exit", "Long", stop = ep - sd, limit = ep + rr * sd)
+if strategy.position_size < 0
+    strategy.exit("S exit", "Short", stop = ep + sd, limit = ep - rr * sd)
+
+plot(hi, "Range high", color = color.new(color.teal, 40), style = plot.style_linebr)
+plot(lo, "Range low", color = color.new(color.red, 40), style = plot.style_linebr)

@@ -1,0 +1,43 @@
+// Pine Script moving average ribbon colored by slope
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/moving-average-ribbon
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("EMA ribbon colored by slope", overlay = true)
+
+src      = input.source(close, "Source")
+slopeLen = input.int(3, "Slope lookback (bars)", minval = 1)
+upCol    = input.color(color.teal, "Rising / falling colors", inline = "c")
+downCol  = input.color(color.red, "", inline = "c")
+len1 = input.int(10, "Lengths 1 to 3", minval = 1, inline = "a")
+len2 = input.int(20, "", minval = 1, inline = "a")
+len3 = input.int(30, "", minval = 1, inline = "a")
+len4 = input.int(40, "Lengths 4 to 6", minval = 1, inline = "b")
+len5 = input.int(50, "", minval = 1, inline = "b")
+len6 = input.int(60, "", minval = 1, inline = "b")
+
+// Rising, falling or flat compared with lookback bars ago
+slopeColor(float ma, int lookback, color up, color down) =>
+    ma > ma[lookback] ? up : ma < ma[lookback] ? down : color.gray
+
+ma1 = ta.ema(src, len1)
+ma2 = ta.ema(src, len2)
+ma3 = ta.ema(src, len3)
+ma4 = ta.ema(src, len4)
+ma5 = ta.ema(src, len5)
+ma6 = ta.ema(src, len6)
+
+p1 = plot(ma1, "EMA 1", slopeColor(ma1, slopeLen, upCol, downCol), 2)
+plot(ma2, "EMA 2", slopeColor(ma2, slopeLen, upCol, downCol))
+plot(ma3, "EMA 3", slopeColor(ma3, slopeLen, upCol, downCol))
+plot(ma4, "EMA 4", slopeColor(ma4, slopeLen, upCol, downCol))
+plot(ma5, "EMA 5", slopeColor(ma5, slopeLen, upCol, downCol))
+p6 = plot(ma6, "EMA 6", slopeColor(ma6, slopeLen, upCol, downCol), 2)
+
+// Stacked: every average above the next slower one (or below, for a downtrend)
+bool stackedUp   = ma1 > ma2 and ma2 > ma3 and ma3 > ma4 and ma4 > ma5 and ma5 > ma6
+bool stackedDown = ma1 < ma2 and ma2 < ma3 and ma3 < ma4 and ma4 < ma5 and ma5 < ma6
+fill(p1, p6, stackedUp ? color.new(upCol, 85) : stackedDown ? color.new(downCol, 85) : color.new(color.gray, 94), "Ribbon")
+
+alertcondition(stackedUp and not stackedUp[1], "Ribbon stacked up", "EMA ribbon stacked bullish on {{ticker}}")
+alertcondition(stackedDown and not stackedDown[1], "Ribbon stacked down", "EMA ribbon stacked bearish on {{ticker}}")

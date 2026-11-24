@@ -1,0 +1,146 @@
+//@version=5
+// Indicator definition. 
+// overlay=true: Draws the indicator directly on the price chart.
+// max_boxes_count, max_labels_count: Set limits for drawing objects for optimization.
+indicator("Flip Zones V1", overlay=true, max_boxes_count=100, max_labels_count=100)
+
+// ---------------- Preset Selection ----------------
+// Input for selecting predefined modes (Default, Sensitive, Conservative) or Custom settings.
+preset = input.string("Default", "Preset", options=["Default", "Sensitive", "Conservative", "Custom"])
+
+// ---------------- Parameters ----------------
+// Input for the length of the Volume Moving Average (MA).
+volLength_input         = input.int(20, "Volume MA Length", minval=1)
+// Input for the multiplier to define 'Unusual Volume'.
+volMultiplier_input     = input.float(2.0, "Unusual Volume Multiplier", step=0.1, minval=0.1)
+// Input for the minimum Body/Range ratio required for a "Breakout" signal.
+bodyRatioBreakout_input = input.float(0.6, "Breakout Body Ratio", step=0.05, minval=0.0, maxval=1.0)
+// Input for the maximum Body/Range ratio required for an "Absorption" signal (small body).
+bodyRatioAbsorb_input   = input.float(0.3, "Absorption Body Ratio", step=0.05, minval=0.0, maxval=1.0)
+// Input for the minimum dominant wick ratio required for an "Absorption" signal (long wick).
+wickDominance_input     = input.float(0.4, "Absorption Wick Dominance", step=0.05, minval=0.0, maxval=1.0)
+// Input for the maximum number of active Flip Zones allowed on the chart.
+maxZones_input          = input.int(15, "Max Zones", minval=1, maxval=200)
+
+// Apply the final parameters based on the selected preset or use the custom inputs.
+// Final Volume MA Length
+volLength         = preset == "Default"      ? 20 : preset == "Sensitive"    ? 10 : preset == "Conservative" ? 30 : volLength_input
+// Final Volume Multiplier
+volMultiplier     = preset == "Default"      ? 2.0 : preset == "Sensitive"    ? 1.5 : preset == "Conservative" ? 2.5 : volMultiplier_input
+// Final Breakout Body Ratio
+bodyRatioBreakout = preset == "Default"      ? 0.6 : preset == "Sensitive"    ? 0.5 : preset == "Conservative" ? 0.7 : bodyRatioBreakout_input
+// Final Absorption Body Ratio
+bodyRatioAbsorb   = preset == "Default"      ? 0.3 : preset == "Sensitive"    ? 0.35 : preset == "Conservative" ? 0.25 : bodyRatioAbsorb_input
+// Final Absorption Wick Dominance
+wickDominance     = preset == "Default"      ? 0.4 : preset == "Sensitive"    ? 0.3 : preset == "Conservative" ? 0.5 : wickDominance_input
+// Final Maximum Active Zones
+maxZones          = preset == "Default"      ? 15 : preset == "Sensitive"    ? 20 : preset == "Conservative" ? 10 : maxZones_input
+
+// ---------------- Volume Calculation ----------------
+// Calculate the Simple Moving Average (SMA) of volume over the determined length.
+volMA = ta.sma(volume, volLength)
+// Define 'abnormal volume': current volume is greater than (Volume MA * Volume Multiplier).
+abnormalVol = volume > (volMA * volMultiplier)
+
+// ---------------- Candle Structure ----------------
+// Calculate the size of the candle body (absolute difference between close and open).
+body = math.abs(close - open)
+// Calculate the total range of the candle (high - low).
+rng = high - low
+// Calculate the size of the upper wick.
+upperWick = high - math.max(open, close)
+// Calculate the size of the lower wick.
+lowerWick = math.min(open, close) - low
+// Check if the range is zero (to prevent division by zero).
+rngIsZero = rng == 0.0
+// Calculate the Body/Range ratio. If range is zero, default to 0.0.
+bodyOverRange = rngIsZero ? 0.0 : body / rng
+// Calculate the Dominant Wick/Range ratio (the larger of the two wicks).
+maxWickOverRange = rngIsZero ? 0.0 : math.max(upperWick, lowerWick) / rng
+
+// ---------------- Flip Detection ----------------
+// Define Breakout signal: Abnormal Volume AND Body/Range >= Breakout Ratio.
+isBreakout = abnormalVol and (bodyOverRange >= bodyRatioBreakout)
+// Define Absorption signal: Abnormal Volume AND Body/Range <= Absorption Ratio AND Dominant Wick >= Wick Dominance.
+isAbsorb   = abnormalVol and (bodyOverRange <= bodyRatioAbsorb) and (maxWickOverRange >= wickDominance)
+
+// ---------------- Arrays ----------------
+// Arrays to store drawing objects (Box, Label) and signal data.
+var box[]   boxes   = array.new<box>()
+var label[] labels  = array.new<label>()
+var float[] sigLow  = array.new_float() // Low price of the signal zone
+var float[] sigHigh = array.new_float() // High price of the signal zone
+var int[]   sigDir  = array.new_int() // Initial signal direction (+1 bull, -1 bear)
+var int[]   sigBar  = array.new_int() // Bar index of the signal (used for plotting)
+
+// ---------------- Trim old boxes and labels ----------------
+// Internal function to remove the oldest signals if the count exceeds maxZones.
+f_trim_old(_max) =>
+    while array.size(boxes) > _max
+        box.delete(array.shift(boxes)) // Delete the oldest Box object
+        label.delete(array.shift(labels)) // Delete the oldest Label object
+        array.shift(sigLow) // Remove associated signal data
+        array.shift(sigHigh)
+        array.shift(sigDir)
+        array.shift(sigBar)
+
+// ---------------- Register new flip signal ----------------
+if (isBreakout or isAbsorb)
+    // Determine the initial signal direction.
+    dir = close >= open ? 1 : -1
+    // Create the Box from the starting bar_index to the next bar. Uses bar_index.
+    b = box.new(left=bar_index, right=bar_index+1, top=high, bottom=low, bgcolor=color.new(color.gray, 90), border_color=color.new(color.gray, 100)) 
+    // Create the Label at the center of the starting bar. Uses bar_index.
+    l = label.new(x=bar_index, y=(high+low)/2, text="", style=label.style_label_center, textcolor=color.white, size=size.small)
+    // Push the objects and signal data to their respective arrays.
+    array.push(boxes, b)
+    array.push(labels, l)
+    array.push(sigLow, low)
+    array.push(sigHigh, high)
+    array.push(sigDir, dir)
+    array.push(sigBar, bar_index)
+    // Execute the trimming function.
+    f_trim_old(maxZones)
+
+// ---------------- Dynamic box update ----------------
+// If there are active Boxes:
+if array.size(boxes) > 0
+    // Loop through all active Boxes for update.
+    for i = 0 to array.size(boxes)-1
+        b  = array.get(boxes, i) // Get the Box object
+        l  = array.get(labels, i) // Get the Label object
+        sL = array.get(sigLow, i) // Get the signal's Low price
+        sH = array.get(sigHigh, i) // Get the signal's High price
+        sigBarIndex = array.get(sigBar, i) // Get the starting bar index
+
+        // Extend the right side of the Box to the current bar (current bar_index + 1).
+        // NOTE: This line is what causes the '500 bar lookback' error in old data.
+        box.set_right(b, bar_index+1)
+        // Update the Box's price boundaries (ensures accurate zone display).
+        box.set_top(b, sH)
+        box.set_bottom(b, sL)
+
+        // Dynamic direction detection: check if the zone has been flipped/broken.
+        isBull = close > sH // Current close is above the zone's high.
+        isBear = close < sL // Current close is below the zone's low.
+
+        // Logic for coloring the Box and setting the Label text.
+        if isBull
+            box.set_bgcolor(b, color.new(color.green, 85)) // Bullish flip (broken to the upside)
+            box.set_border_color(b, color.new(color.gray, 100))
+            label.set_text(l, "Bullish Flip")
+            label.set_color(l, color.green)
+        else if isBear
+            box.set_bgcolor(b, color.new(color.red, 85)) // Bearish flip (broken to the downside)
+            box.set_border_color(b, color.new(color.gray, 100))
+            label.set_text(l, "Bearish Flip")
+            label.set_color(l, color.red)
+        else
+            box.set_bgcolor(b, color.new(color.gray, 90)) // Neutral (zone still active)
+            box.set_border_color(b, color.new(color.gray, 100))
+            label.set_text(l, "Neutral")
+            label.set_color(l, color.gray)
+
+        // Position the Label at the center of the starting bar (using sigBarIndex).
+        label.set_x(l, sigBarIndex)
+        label.set_y(l, (sL + sH)/2)

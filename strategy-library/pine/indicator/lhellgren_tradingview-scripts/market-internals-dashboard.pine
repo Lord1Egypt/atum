@@ -1,0 +1,199 @@
+//@version=5
+indicator("Market Internals Dashboard", overlay=true)
+
+//==============================
+// Settings
+//==============================
+GRP_SOURCE = "Internals Source"
+tfInternals = input.timeframe("5", "Internals Timeframe", group=GRP_SOURCE)
+tickSourceMode = input.string("Auto", "TICK Source", options=["Auto", "NYSE TICK", "NASDAQ TICKQ"], group=GRP_SOURCE)
+
+GRP_THRESH = "State Thresholds"
+tickBiasThresh   = input.int(350, "TICK Bias Threshold", minval=1, group=GRP_THRESH)
+tickStrongThresh = input.int(800, "TICK Strong Threshold", minval=1, group=GRP_THRESH)
+
+voldBiasThreshB   = input.float(0.50, "VOLD Bias Threshold, Billions", minval=0.01, step=0.05, group=GRP_THRESH)
+voldStrongThreshB = input.float(1.25, "VOLD Strong Threshold, Billions", minval=0.01, step=0.05, group=GRP_THRESH)
+
+addBiasThresh   = input.int(600, "ADD Bias Threshold", minval=1, group=GRP_THRESH)
+addStrongThresh = input.int(1200, "ADD Strong Threshold", minval=1, group=GRP_THRESH)
+
+//==============================
+// Helpers
+//==============================
+round2(x) =>
+    math.round(x * 100) / 100
+
+round0(x) =>
+    math.round(x)
+
+formatInt(x) =>
+    na(x) ? "n/a" : str.tostring(round0(x))
+
+formatFloat(x) =>
+    na(x) ? "n/a" : str.tostring(round2(x))
+
+formatVoldRaw(raw) =>
+    string out = "n/a"
+    if not na(raw)
+        b = raw / 1e9
+        out := b > 0 ? "+" + str.tostring(round2(b)) + " B" : str.tostring(round2(b)) + " B"
+    out
+
+f_stateColor(state) =>
+    color c = color.new(color.gray, 55)
+    if state > 0
+        c := color.new(color.green, 20)
+    else if state < 0
+        c := color.new(color.red, 20)
+    c
+
+f_stateLabel(state) =>
+    string label = "Neutral"
+    if state > 0
+        label := "Bullish"
+    else if state < 0
+        label := "Bearish"
+    label
+
+f_headerColor(stateText) =>
+    color c = color.new(color.gray, 50)
+    if stateText == "Bullish"
+        c := color.new(color.green, 20)
+    else if stateText == "Bearish"
+        c := color.new(color.red, 20)
+    c
+
+f_participationColor(partText) =>
+    color c = color.new(color.gray, 60)
+    if partText == "Expanding"
+        c := color.new(color.green, 20)
+    else if partText == "Stable"
+        c := color.new(color.blue, 35)
+    else if partText == "Weakening"
+        c := color.new(color.orange, 25)
+    else if partText == "Mixed"
+        c := color.new(color.gray, 55)
+    c
+
+//==============================
+// Data
+//==============================
+isNasdaqChart = str.contains(syminfo.ticker, "NQ") or str.contains(syminfo.ticker, "QQQ") or str.contains(syminfo.ticker, "NDX")
+useNasdaqTick = tickSourceMode == "NASDAQ TICKQ" or (tickSourceMode == "Auto" and isNasdaqChart)
+
+tickNyseRaw   = request.security("USI:TICK", tfInternals, close, ignore_invalid_symbol=true)
+tickNasdaqRaw = request.security("USI:TICKQ", tfInternals, close, ignore_invalid_symbol=true)
+
+tickRaw = useNasdaqTick ? nz(tickNasdaqRaw, tickNyseRaw) : tickNyseRaw
+tickName = useNasdaqTick and not na(tickNasdaqRaw) ? "TICKQ" : "TICK"
+
+addRaw  = request.security("USI:ADD", tfInternals, close, ignore_invalid_symbol=true)
+voldRaw = request.security("USI:VOLD", tfInternals, close, ignore_invalid_symbol=true)
+vixRaw  = request.security("CBOE:VIX", tfInternals, close, ignore_invalid_symbol=true)
+
+// Light persistence filter for 5m trend trading
+tick  = ta.ema(tickRaw, 2)
+add   = ta.ema(addRaw, 2)
+voldR = ta.ema(voldRaw, 2)
+vix   = ta.ema(vixRaw, 2)
+
+//==============================
+// Core states
+//==============================
+tickState = 0
+if tick >= tickStrongThresh
+    tickState := 2
+else if tick >= tickBiasThresh
+    tickState := 1
+else if tick <= -tickStrongThresh
+    tickState := -2
+else if tick <= -tickBiasThresh
+    tickState := -1
+
+voldB = voldR / 1e9
+voldState = 0
+if voldB >= voldStrongThreshB
+    voldState := 2
+else if voldB >= voldBiasThreshB
+    voldState := 1
+else if voldB <= -voldStrongThreshB
+    voldState := -2
+else if voldB <= -voldBiasThreshB
+    voldState := -1
+
+addState = 0
+if add >= addStrongThresh
+    addState := 2
+else if add >= addBiasThresh
+    addState := 1
+else if add <= -addStrongThresh
+    addState := -2
+else if add <= -addBiasThresh
+    addState := -1
+
+// VIX is context only, not part of core market-state calculation
+vixEMA   = ta.ema(vix, 8)
+vixSlope = vix - vix[2]
+
+vixState = 0
+if not na(vix) and not na(vixEMA) and not na(vixSlope)
+    if vix < vixEMA and vixSlope < 0
+        vixState := 1
+    else if vix > vixEMA and vixSlope > 0
+        vixState := -1
+
+//==============================
+// Market State Logic
+//==============================
+bullCoreCount = (tickState > 0 ? 1 : 0) + (voldState > 0 ? 1 : 0) + (addState > 0 ? 1 : 0)
+bearCoreCount = (tickState < 0 ? 1 : 0) + (voldState < 0 ? 1 : 0) + (addState < 0 ? 1 : 0)
+
+coreBull = bullCoreCount == 3
+coreBear = bearCoreCount == 3
+mixedCore = bullCoreCount > 0 and bearCoreCount > 0
+
+marketState = "Neutral"
+
+if coreBull
+    marketState := "Bullish"
+else if coreBear
+    marketState := "Bearish"
+else
+    marketState := "Neutral"
+
+//==============================
+// Participation Logic
+//==============================
+bullParticipation = tickState > 0 and voldState > 0
+bearParticipation = tickState < 0 and voldState < 0
+
+participation = "Mixed"
+
+if coreBull or coreBear
+    participation := "Expanding"
+else if bullParticipation or bearParticipation
+    participation := "Stable"
+else if mixedCore
+    participation := "Weakening"
+else
+    participation := "Mixed"
+
+//==============================
+// Display values
+//==============================
+tickVal = formatInt(tick)
+voldVal = formatVoldRaw(voldR)
+addVal  = formatInt(add)
+vixVal  = formatFloat(vix)
+
+//==============================
+// Table — compact format
+//==============================
+var table dash = table.new(position.top_right, 2, 5, border_width=1)
+
+if barstate.islast
+    table.cell(dash, 0, 0, marketState, text_color=color.white, bgcolor=f_headerColor(marketState))
+    table.cell(dash, 1, 0, participation, text_color=color.white, bgcolor=f_participationColor(participation))
+
+    table.cell(dash, 0, 1, tickName + " (

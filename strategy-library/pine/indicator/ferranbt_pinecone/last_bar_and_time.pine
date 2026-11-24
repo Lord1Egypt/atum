@@ -1,0 +1,11 @@
+//@version=6
+indicator("basics/last_bar_and_time")
+// Bars: 3
+// bars 197..199, time i*1000, period 1000.
+if barstate.islast
+    log.info(str.tostring(last_bar_time))
+    log.info(str.tostring(time_close) + "|" + str.tostring(time_tradingday))
+
+// Expected output:
+// 199000
+// 199999|0

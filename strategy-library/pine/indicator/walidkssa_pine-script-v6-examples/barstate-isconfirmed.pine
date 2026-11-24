@@ -1,0 +1,46 @@
+// Pine Script barstate.isconfirmed: signals on closed bars
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/barstate-isconfirmed
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Confirmed vs live signals", overlay = true)
+
+len = input.int(20, "Breakout lookback (bars)", minval = 2)
+
+level    = ta.highest(high, len)[1]
+breakout = close > level
+
+// Final: only on a closed bar. Live: may still change before the close
+bool confirmed = breakout and barstate.isconfirmed
+bool live      = breakout and not barstate.isconfirmed
+
+// Live signals that were gone when their bar closed (counted on realtime bars only)
+varip bool seenLive = false
+varip int  vanished = 0
+if barstate.isnew
+    seenLive := false
+if live
+    seenLive := true
+if barstate.isconfirmed and seenLive and not breakout
+    vanished += 1
+
+plot(level, "Breakout level", color.gray, style = plot.style_stepline)
+plotshape(confirmed, "Confirmed breakout", shape.triangleup, location.belowbar, color.teal, size = size.small)
+plotshape(live, "Live breakout (not final)", shape.triangleup, location.belowbar, color.new(color.orange, 40), size = size.small)
+
+if confirmed
+    alert("Breakout: close above " + str.tostring(level, format.mintick), alert.freq_once_per_bar_close)
+
+// The bar states, as the last bar sees them
+var table states = table.new(position.bottom_right, 2, 6, bgcolor = color.new(color.black, 20), border_width = 1, border_color = color.new(color.gray, 60))
+stateRow(table t, int r, string name, bool value) =>
+    t.cell(0, r, name, text_color = color.silver, text_halign = text.align_left, text_size = size.small)
+    t.cell(1, r, value ? "true" : "false", text_color = value ? color.teal : color.gray, text_size = size.small)
+if barstate.islast
+    stateRow(states, 0, "barstate.isconfirmed", barstate.isconfirmed)
+    stateRow(states, 1, "barstate.isrealtime", barstate.isrealtime)
+    stateRow(states, 2, "barstate.isnew", barstate.isnew)
+    stateRow(states, 3, "barstate.islast", barstate.islast)
+    stateRow(states, 4, "barstate.ishistory", barstate.ishistory)
+    states.cell(0, 5, "Vanished live signals", text_color = color.silver, text_halign = text.align_left, text_size = size.small)
+    states.cell(1, 5, str.tostring(vanished), text_color = color.white, text_size = size.small)

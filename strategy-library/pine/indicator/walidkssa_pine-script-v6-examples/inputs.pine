@@ -1,0 +1,51 @@
+// Pine Script inputs: input.int, source, timeframe, session
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/inputs
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Settings tab example", overlay = true)
+
+const string G_MA   = "Moving average"
+const string G_VWAP = "VWAP"
+const string G_SESS = "Session highlight"
+
+enum MaKind
+    sma = "SMA"
+    ema = "EMA"
+    wma = "WMA"
+
+// Moving average: the kind and the length share a row
+src     = input.source(close, "Source", group = G_MA)
+maKind  = input.enum(MaKind.ema, "Average", inline = "ma", group = G_MA)
+maLen   = input.int(50, "", minval = 1, maxval = 500, inline = "ma", group = G_MA, tooltip = "Kind of average and its length in bars")
+maColor = input.color(color.orange, "Color", group = G_MA)
+
+// VWAP that restarts every day, week or month
+showVwap = input.bool(true, "Show VWAP", group = G_VWAP)
+resetTf  = input.timeframe("D", "Restart every", options = ["D", "W", "M"], group = G_VWAP, active = showVwap)
+bandMult = input.float(1.0, "Band width (x stdev)", minval = 0, step = 0.5, group = G_VWAP, active = showVwap)
+
+// Session highlight: its fields can only be edited when it's switched on
+useSess = input.bool(false, "Highlight a session", group = G_SESS)
+sess    = input.session("0930-1600", "Session", group = G_SESS, active = useSess)
+tzName  = input.string("Exchange", "Time zone", options = ["Exchange", "UTC", "America/New_York", "Europe/London", "Asia/Tokyo"], group = G_SESS, active = useSess)
+
+// All three averages run on every bar; the input only picks which one is shown
+smaLine = ta.sma(src, maLen)
+emaLine = ta.ema(src, maLen)
+wmaLine = ta.wma(src, maLen)
+float ma = switch maKind
+    MaKind.sma => smaLine
+    MaKind.wma => wmaLine
+    => emaLine
+
+[vwapLine, vwapUpper, vwapLower] = ta.vwap(hlc3, timeframe.change(resetTf), bandMult)
+
+string tz = tzName == "Exchange" ? syminfo.timezone : tzName
+bool inSess = not na(time(timeframe.period, sess, tz))
+
+plot(ma, "Moving average", maColor, 2)
+plot(showVwap ? vwapLine : na, "VWAP", color.blue)
+plot(showVwap ? vwapUpper : na, "VWAP upper band", color.new(color.blue, 60))
+plot(showVwap ? vwapLower : na, "VWAP lower band", color.new(color.blue, 60))
+bgcolor(useSess and inSess ? color.new(color.yellow, 88) : na, title = "Session")

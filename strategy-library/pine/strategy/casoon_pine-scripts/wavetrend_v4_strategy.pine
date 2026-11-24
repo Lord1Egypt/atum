@@ -1,0 +1,886 @@
+//@version=6
+// ============================================================================
+// WaveTrend v4 [WavesUnchained] — Strategy (standalone)
+// Version: 5.0
+// Author: WavesUnchained
+// Build: 2026-11-17
+// ============================================================================
+// WT oscillator cross at OS/OB extremes — entry, ATR stop, break-even, trailing
+// and structural exit. No entry gates beyond the cross itself.
+//
+// Features:
+//   ✓ WT cross below −level → long; above +level → short (one symmetric level per TF)
+//   ✓ ATR frozen at signal bar; SL/TP set from fill price + frozen ATR
+//   ✓ Break-even confirmed on close from next bar only (calc_on_order_fills)
+//   ✓ Hard 1-bar post-exit cooldown prevents same-bar re-entry after fill
+//   ✓ Exit reason logged from exit_comment (tp / sl / be / trail / struct / time)
+//   ✓ Session filter, date range, max drawdown, max intraday loss, losing streak limit
+//   ✓ Diagnostic logs: WT4 PIVOT, WT4 BLOCKED, WT4 ENTRY, WT4 REAL EXIT
+//
+// Data Contract:
+//   Price:     REQUIRED   chart symbol
+//   Volume:    NO
+//   OI:        NO
+//   Reference: NO
+//   Verdict:   CFD-safe
+// ============================================================================
+
+strategy("WaveTrend v4 [WavesUnchained] — Strategy",
+     overlay             = false,
+     calc_on_order_fills = true,
+     default_qty_type    = strategy.percent_of_equity,
+     default_qty_value   = 10,
+     initial_capital     = 10000,
+     commission_type     = strategy.commission.percent,
+     commission_value    = 0,
+     slippage            = 0)
+
+// Synthetische Bar-Preise (Heikin Ashi, Renko …): Orders füllen zu Marktpreisen,
+// der Backtest gilt dort nicht. Kurzer Hinweis unten rechts statt auf der Kerze.
+var table chartTypeWarn = table.new(position.bottom_right, 1, 1)
+if (barstate.islastconfirmedhistory or barstate.islast) and not chart.is_standard
+    table.cell(chartTypeWarn, 0, 0, "WT v4 Strategy · backtest invalid on this chart type",
+         bgcolor = color.new(color.red, 10), text_color = color.white, text_size = size.small)
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+g_wt      = "WaveTrend"
+g_risk    = "Risk"
+g_be      = "Break-Even"
+g_strat   = "Strategy"
+g_pivot   = "Pivots"
+g_filters = "Filters"
+g_div     = "Divergences"
+
+chLen   = input.int(10,    "Channel Length",         minval=1,              group=g_wt)
+avgLen  = input.int(21,    "Average Length",         minval=1,              group=g_wt)
+sigLen  = input.int(4,     "Signal Smoothing",       minval=1,              group=g_wt)
+lvl15M  = input.float(10,  "Extreme Level 15M", minval=0, step=1, group=g_wt,
+     tooltip="Long when WT crosses up at or below −level, short when it crosses down at or above +level. One level for both sides.")
+lvl1H   = input.float(20,  "Extreme Level 1H",  minval=0, step=1, group=g_wt)
+lvl4H   = input.float(5,   "Extreme Level 4H",  minval=0, step=1, group=g_wt)
+lvl1D   = input.float(20,  "Extreme Level 1D",  minval=0, step=1, group=g_wt)
+smoothType = input.string("EMA", "Smoothing Type", options=["EMA", "T3"], group=g_wt,
+     tooltip="Consistent smoothing kernel across all timeframes (no per-timeframe smoother switching). EMA = classic WaveTrend; T3 = Tillson T3.")
+
+atrLen  = input.int(14,    "ATR Length",  minval=1,                         group=g_risk)
+slMult  = input.float(1.5, "SL (ATR×)",  minval=0.1, step=0.1,             group=g_risk,
+     tooltip="Stop-Loss multiplier (= risk = 1R). Same across all TFs.")
+tpMult15M = input.float(3.0, "TP 15M (ATR×)",  minval=0.1, step=0.1,        group=g_risk,
+     tooltip="Fixed target. Placed only when the trailing stop is off or Exit Mode is Fixed.")
+tpMult1H  = input.float(3.0, "TP 1H  (ATR×)",  minval=0.1, step=0.1,        group=g_risk)
+tpMult4H  = input.float(4.0, "TP 4H  (ATR×)",  minval=0.1, step=0.1,        group=g_risk)
+tpMult1D  = input.float(4.0, "TP 1D  (ATR×)",  minval=0.1, step=0.1,        group=g_risk)
+
+enableBE = input.bool(true,  "Enable Break-Even Stop",                      group=g_be)
+beTrigR  = input.float(1.0,  "Trigger (R×)", minval=0.1, step=0.1,         group=g_be)
+
+// Trailing Stop — activates after trade reaches trailTriggerR progress.
+// SL trails behind highest-since-entry price by trailDistanceR (in R units).
+// Only moves the stop UP (long) / DOWN (short) — never against us.
+enableTrail   = input.bool(true,  "Enable Trailing Stop",                  group=g_be,
+     tooltip="Trails SL after the trade reaches trailTriggerR progress. " +
+             "When enabled the fixed ATR TP is not placed as an order — the trail (and the structural exit) " +
+             "take over the profit side. With TP at 2R (15M/1H) a TP limit would fill before the trail could ever arm.")
+trailTriggerR = input.float(2.0, "  Trail Trigger (R×)",  minval=0.1, step=0.1, group=g_be)
+trailDistanceR= input.float(1.0, "  Trail Distance (R×)", minval=0.1, step=0.1, group=g_be,
+     tooltip="Stop trails this distance behind extreme price (in R units).")
+
+showSignals   = input.bool(true, "Show Entry Labels on Chart",                 group=g_strat)
+dirMode       = input.string("Both", "Trade Direction",
+     options=["Both", "Long Only", "Short Only"],                            group=g_strat)
+cooldown      = input.int(0, "Cooldown Bars After Exit", minval=0,           group=g_strat)
+exitMode      = input.string("Existing", "Exit Mode", options=["Existing", "Fixed"], group=g_strat,
+     tooltip="Existing: break-even, trailing and structural exit as configured. Fixed: only the ATR stop (Risk group), the ATR target of the timeframe and the time limit below; all dynamic exits are off. Use Fixed as the comparison for the dynamic exits on the same entries.")
+fxTimeBars    = input.int(24, "Fixed: Time Limit (Bars)", minval=1,          group=g_strat,
+     tooltip="Fixed mode only. Closes the position at the next bar open after this many bars held.")
+_fx = exitMode == "Fixed"
+useStructExit   = input.bool(true, "Structural Exit (unconfirmed pivot)",     group=g_strat,
+     tooltip="Close trade when price forms a potential swing against the position (high[1] > high[0] and high[2]) before ATR target is reached.")
+structMinR15M = input.float(2.0,  "  Struct Exit Min Profit 15M (R×)", minval=0.0, step=0.1, group=g_strat)
+structMinR1H  = input.float(2.0,  "  Struct Exit Min Profit 1H (R×)", minval=0.0, step=0.1, group=g_strat)
+structMinR4H  = input.float(2.5,  "  Struct Exit Min Profit 4H (R×)", minval=0.0, step=0.1, group=g_strat)
+structMinR1D  = input.float(3.0,  "  Struct Exit Min Profit 1D (R×)", minval=0.0, step=0.1, group=g_strat)
+
+pivLen = input.int(5, "Pivot Length", minval=2, maxval=20,                   group=g_pivot,
+     tooltip="Bars on each side to confirm a swing high/low. Used for the pivot log and the entry label only.")
+
+useSession    = input.bool(false,  "Session Filter",                         group=g_filters)
+sessionInput  = input.session("0000-2345", "Session",                        group=g_filters)
+useDateRange  = input.bool(false,  "Date Range",                             group=g_filters)
+dateFrom      = input.time(timestamp("01 Jan 2020 00:00 +0000"), "From",     group=g_filters)
+dateTo        = input.time(timestamp("31 Dec 2030 23:59 +0000"), "To",       group=g_filters)
+useMaxDD      = input.bool(false,  "Max Drawdown",                           group=g_filters)
+maxDD         = input.float(20.0,  "Max Drawdown (%)", minval=1, step=1,     group=g_filters)
+useMaxIntraDD = input.bool(false,  "Max Intraday Loss",                      group=g_filters)
+maxIntraDD    = input.float(5.0,   "Max Intraday Loss (%)", minval=1, step=1, group=g_filters)
+useLossStreak = input.bool(false,  "Losing Streak Limit",                    group=g_filters)
+maxLossStreak = input.int(5,       "Max Consecutive Losses", minval=1,       group=g_filters)
+
+showDiv     = input.bool(true,  "Show Divergences",   group=g_div)
+divSrc      = input.string("Wave Trend", "Source",    group=g_div, options=["Wave Trend", "Signal", "Histogram"])
+divLbR      = input.int(5,  "Pivot Lookback Right", minval=1, group=g_div)
+divLbL      = input.int(5,  "Pivot Lookback Left",  minval=1, group=g_div)
+divEqTol    = input.float(2.0, "Equal Peak/Trough Tolerance (WT units)", minval=0.0, step=0.5, group=g_div,
+     tooltip="Erlaubt equal highs/lows als Divergenz. 0 = strikt, 2 = bis zu 2 WT-Einheiten Abweichung zulässig.")
+plotBull    = input.bool(true,  "Bullish",        inline="div_bull", group=g_div)
+plotHidBull = input.bool(false, "Hidden Bullish", inline="div_bull", group=g_div)
+plotBear    = input.bool(true,  "Bearish",        inline="div_bear", group=g_div)
+plotHidBear = input.bool(false, "Hidden Bearish", inline="div_bear", group=g_div)
+showDivPivots = input.bool(false, "Debug: alle Osc-Pivots anzeigen", group=g_div,
+     tooltip="Zeigt graue Punkte an jedem erkannten WT-Oszillator-Pivot. Damit sieht man ob _divPhFound feuert.")
+
+// ─── Risk limits (fire-and-forget, built-in strategy.risk) ───────────────────
+strategy.risk.max_drawdown(useMaxDD      ? maxDD      : 100, strategy.percent_of_equity)
+strategy.risk.max_intraday_loss(useMaxIntraDD ? maxIntraDD : 100, strategy.percent_of_equity)
+
+// ─── WaveTrend ───────────────────────────────────────────────────────────────
+f_t3(float src, int length) =>
+    float v = 0.7
+    float c1 = -v * v * v
+    float c2 = 3.0 * v * v + 3.0 * v * v * v
+    float c3 = -6.0 * v * v - 3.0 * v - 3.0 * v * v * v
+    float c4 = 1.0 + 3.0 * v + v * v * v + 3.0 * v * v
+    float e1 = ta.ema(src, length)
+    float e2 = ta.ema(e1, length)
+    float e3 = ta.ema(e2, length)
+    float e4 = ta.ema(e3, length)
+    float e5 = ta.ema(e4, length)
+    float e6 = ta.ema(e5, length)
+    c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3
+
+f_smooth(float src, int length, string mode) =>
+    switch mode
+        "T3" => f_t3(src, length)
+        =>      ta.ema(src, length)
+
+_esa        = ta.ema(hlc3, chLen)
+_d          = ta.ema(math.abs(hlc3 - _esa), chLen)
+_ci         = _d != 0 ? (hlc3 - _esa) / (0.015 * _d) : 0.0
+wt1         = f_smooth(_ci, avgLen, smoothType)
+wt2         = ta.sma(wt1, sigLen)
+
+// ─── Pivots ───────────────────────────────────────────────────────────────────
+_phVal   = ta.pivothigh(high, pivLen, pivLen)
+_plVal   = ta.pivotlow(low,  pivLen, pivLen)
+_phFound = not na(_phVal)
+_plFound = not na(_plVal)
+
+var int _lastHighBar = na
+var int _lastLowBar  = na
+if _phFound
+    _lastHighBar := bar_index - pivLen
+if _plFound
+    _lastLowBar  := bar_index - pivLen
+
+barsSinceHighPiv = not na(_lastHighBar) ? bar_index - _lastHighBar : na
+barsSinceLowPiv  = not na(_lastLowBar)  ? bar_index - _lastLowBar  : na
+
+// ─── Divergence visualization (oscillator-pivot based) ───────────────────────
+// Custom pivot detection: right side strict > (peak confirmed), left side >= (flat
+// tops allowed). ta.pivothigh requires strict > on both sides and misses flat-topped
+// WT peaks that are common on slower timeframes like 4H.
+wt3_hist    = wt1 - wt2
+_divOsc     = not showDiv ? na : divSrc == "Signal" ? wt2 : divSrc == "Histogram" ? wt3_hist : wt1
+_oscRightHi = ta.highest(_divOsc, divLbR)
+_oscLeftHi  = ta.highest(_divOsc, divLbL)[divLbR + 1]
+_oscRightLo = ta.lowest(_divOsc,  divLbR)
+_oscLeftLo  = ta.lowest(_divOsc,  divLbL)[divLbR + 1]
+_divPhFound = not na(_divOsc[divLbR]) and _divOsc[divLbR] > _oscRightHi and _divOsc[divLbR] >= _oscLeftHi
+_divPlFound = not na(_divOsc[divLbR]) and _divOsc[divLbR] < _oscRightLo and _divOsc[divLbR] <= _oscLeftLo
+
+// Wide price window to account for WT lag: on 4H, WT peaks ~15 bars after price peaks.
+// We need to look further left than just the WT pivot detection window.
+// divLbR + divLbL covers the oscillator window; +20 covers typical WT lag.
+// Clamped to the bars since the previous oscillator pivot of the same type, so two
+// consecutive pivots never share price bars (overlapping windows could return the
+// same high/low for both and hide or fake a HH/LL).
+_divWinMax  = divLbR + divLbL + 20
+_divPhGap   = nz(ta.barssince(_divPhFound)[1] + 1, _divWinMax)
+_divPlGap   = nz(ta.barssince(_divPlFound)[1] + 1, _divWinMax)
+_divWinHi   = ta.highest(high, math.min(_divWinMax, _divPhGap))
+_divWinLo   = ta.lowest(low,   math.min(_divWinMax, _divPlGap))
+
+_prevPhOsc   = ta.valuewhen(_divPhFound, _divOsc[divLbR], 1)
+_prevPhPrice = ta.valuewhen(_divPhFound, _divWinHi, 1)
+_prevPlOsc   = ta.valuewhen(_divPlFound, _divOsc[divLbR], 1)
+_prevPlPrice = ta.valuewhen(_divPlFound, _divWinLo, 1)
+
+_divOscLH   = _divOsc[divLbR] < _prevPhOsc + divEqTol
+_divPriceHH = _divWinHi > _prevPhPrice
+bearDivCond = showDiv and plotBear    and _divPhFound and not na(_prevPhOsc) and _divPriceHH and _divOscLH
+
+_divOscHL   = _divOsc[divLbR] > _prevPlOsc - divEqTol
+_divPriceLL = _divWinLo < _prevPlPrice
+bullDivCond = showDiv and plotBull    and _divPlFound and not na(_prevPlOsc) and _divPriceLL and _divOscHL
+
+_divOscHH   = _divOsc[divLbR] > _prevPhOsc
+_divPriceLH = _divWinHi < _prevPhPrice
+hidBearDivCond = showDiv and plotHidBear and _divPhFound and not na(_prevPhOsc) and _divPriceLH and _divOscHH
+
+_divOscLL   = _divOsc[divLbR] < _prevPlOsc
+_divPriceHL = _divWinLo > _prevPlPrice
+hidBullDivCond = showDiv and plotHidBull and _divPlFound and not na(_prevPlOsc) and _divPriceHL and _divOscLL
+
+// ─── ATR ─────────────────────────────────────────────────────────────────────
+atrVal  = ta.atr(atrLen)
+
+// ─── Filters ─────────────────────────────────────────────────────────────────
+_inSession   = not useSession  or not na(time(timeframe.period, sessionInput))
+_inDateRange = not useDateRange or (time >= dateFrom and time <= dateTo)
+
+var int  _lossStreak    = 0
+var bool _streakBlocked = false
+_newLoss = strategy.losstrades > strategy.losstrades[1]
+_newWin  = strategy.wintrades  > strategy.wintrades[1]
+if _newLoss
+    _lossStreak := _lossStreak + 1
+if _newWin
+    _lossStreak := 0
+_streakBlocked := useLossStreak and _lossStreak >= maxLossStreak
+
+_tfSec       = timeframe.in_seconds()
+_tfOk        = _tfSec == 900 or _tfSec == 3600 or _tfSec == 14400 or _tfSec == 86400
+_tpMult      = _tfSec == 900 ? tpMult15M    : _tfSec == 3600 ? tpMult1H    : _tfSec == 14400 ? tpMult4H    : tpMult1D
+_level       = _tfSec == 900 ? lvl15M       : _tfSec == 3600 ? lvl1H       : _tfSec == 14400 ? lvl4H       : lvl1D
+_osLevel     = -_level
+_obLevel     = _level
+
+// ─── Signals ─────────────────────────────────────────────────────────────────
+longSignal  = ta.crossover(wt1, wt2)  and wt1 <= _osLevel
+shortSignal = ta.crossunder(wt1, wt2) and wt1 >= _obLevel
+
+canLong  = dirMode != "Short Only"
+canShort = dirMode != "Long Only"
+
+// ─── Trade state ─────────────────────────────────────────────────────────────
+// varip: must survive across intra-bar recalculations (calc_on_order_fills).
+// Assigned in the fill recalculation; read in the close recalculation.
+varip float _longSL   = na
+varip float _longTP   = na
+varip float _longRisk = na
+varip bool  _longBE   = false
+
+varip float _shortSL   = na
+varip float _shortTP   = na
+varip float _shortRisk = na
+varip bool  _shortBE   = false
+
+// Trailing-stop state: highest close since long entry / lowest close since short entry.
+varip float _maxCloseLong  = na
+varip float _minCloseShort = na
+// Trail stays armed once triggered — otherwise the stop falls back to SL/BE when close dips below the trigger
+varip bool  _longTrailArmed  = false
+varip bool  _shortTrailArmed = false
+
+varip int _lastExitBar = na
+
+// Frozen at signal bar — used for SL/TP and exit log
+var float _pendingLongAtr    = na
+var float _pendingShortAtr   = na
+var int   _pendingLowPivBars  = na
+var int   _pendingHighPivBars = na
+
+// Per-trade entry context, indexed by trade idx. Filled when a fill is detected
+// in the retroactive logger below; read in the exit log. Avoids the fragile
+// large-lookback approach (snapshots are taken when lookback is small).
+var array<float> _tradeAtr      = array.new<float>()
+var array<int>   _tradeLpb      = array.new<int>()
+var array<int>   _tradeHpb      = array.new<int>()
+
+// Reliable trade-event detection.
+// _totalTrades = closedtrades + opentrades catches all entry events including
+// the case where a trade opens and closes in the same simulation tick (which
+// _isNewLong via opentrades alone misses).
+varip int  _prevOpenTrades   = 0
+varip int  _prevClosedTrades = 0
+varip int  _prevTotalTrades  = 0
+varip int  _lastLoggedFill   = 0
+varip int  _barLockIndex     = -1
+varip bool _exitLockThisBar  = false
+
+// Reset per-bar lock on first recalculation of each new bar
+if bar_index != _barLockIndex
+    _barLockIndex    := bar_index
+    _exitLockThisBar := false
+
+_totalTrades = strategy.closedtrades + strategy.opentrades
+_isNewEntry  = _totalTrades > _prevTotalTrades
+_isNewLong   = _isNewEntry and strategy.position_size > 0
+_isNewShort  = _isNewEntry and strategy.position_size < 0
+_isFlat      = strategy.position_size == 0
+_isNewFlat   = strategy.closedtrades > _prevClosedTrades
+
+// Set SL/TP/metadata when a new entry is currently open. Same-tick close
+// (entry+TP in one tick) skips this since position_size==0 — fill is still
+// logged retroactively below.
+if _isNewLong
+    _atrUsed   = na(_pendingLongAtr) ? atrVal : _pendingLongAtr
+    _entry     = strategy.position_avg_price
+    _longSL   := _entry - slMult * _atrUsed
+    _longTP   := _entry + _tpMult * _atrUsed
+    _longRisk := math.max(_entry - _longSL, syminfo.mintick)
+    _longBE   := false
+    _maxCloseLong := _entry
+    _longTrailArmed := false
+    _pendingLongAtr     := na
+    _pendingShortAtr    := na
+    _pendingLowPivBars  := na
+    _pendingHighPivBars := na
+
+if _isNewShort
+    _atrUsed    = na(_pendingShortAtr) ? atrVal : _pendingShortAtr
+    _entry      = strategy.position_avg_price
+    _shortSL   := _entry + slMult * _atrUsed
+    _shortTP   := _entry - _tpMult * _atrUsed
+    _shortRisk := math.max(_shortSL - _entry, syminfo.mintick)
+    _shortBE   := false
+    _minCloseShort := _entry
+    _shortTrailArmed := false
+    _pendingLongAtr     := na
+    _pendingShortAtr    := na
+    _pendingLowPivBars  := na
+    _pendingHighPivBars := na
+
+// Retroactive fill logging: iterates through any unlogged trades and pulls
+// data from strategy.closedtrades or strategy.opentrades. Catches every entry
+// event including same-tick entry+exit cases.
+if _totalTrades > _lastLoggedFill
+    for _i = _lastLoggedFill to _totalTrades - 1
+        int    _ebarF = -1
+        float  _epF   = na
+        float  _szF   = 0.0
+        string _src   = ""
+        if _i < strategy.closedtrades
+            _epF   := strategy.closedtrades.entry_price(_i)
+            _szF   := strategy.closedtrades.size(_i)
+            _ebarF := strategy.closedtrades.entry_bar_index(_i)
+            _src   := "closed"
+        else
+            _idxOpen = _i - strategy.closedtrades
+            _epF   := strategy.opentrades.entry_price(_idxOpen)
+            _szF   := strategy.opentrades.size(_idxOpen)
+            _ebarF := strategy.opentrades.entry_bar_index(_idxOpen)
+            _src   := "open"
+        _dirF  = _szF > 0 ? "long" : "short"
+        // Snapshot entry context — lookback is small here (fill just detected).
+        _lookbackFresh = math.max(0, bar_index - _ebarF)
+        _atrSnap = na(atrVal[_lookbackFresh])         ? atrVal         : atrVal[_lookbackFresh]
+        _lpbSnap = na(barsSinceLowPiv[_lookbackFresh])  ? -1 : barsSinceLowPiv[_lookbackFresh]
+        _hpbSnap = na(barsSinceHighPiv[_lookbackFresh]) ? -1 : barsSinceHighPiv[_lookbackFresh]
+        array.push(_tradeAtr, _atrSnap)
+        array.push(_tradeLpb, _lpbSnap)
+        array.push(_tradeHpb, _hpbSnap)
+        log.info(str.format('WT4 ENTRY FILL | tradeId={0} | dir={1} | bar={2} | entry={3} | tf={4} | source={5}',
+             _i + 1, _dirF, _ebarF, str.tostring(_epF, format.mintick), timeframe.period, _src))
+    _lastLoggedFill := _totalTrades
+
+if _isNewFlat
+    _exitLockThisBar := true
+    _lastExitBar     := bar_index
+    if (longSignal and canLong) or (shortSignal and canShort)
+        log.info(str.format('WT4 REENTRY_BLOCKED | bar={0} | longSig={1} | shortSig={2} | tf={3}',
+             bar_index, longSignal and canLong, shortSignal and canShort, timeframe.period))
+
+// Must come AFTER all detection blocks
+_prevOpenTrades   := strategy.opentrades
+_prevClosedTrades := strategy.closedtrades
+_prevTotalTrades  := _totalTrades
+
+if _isFlat
+    _longBE    := false
+    _shortBE   := false
+    _longSL    := na
+    _longTP    := na
+    _longRisk  := na
+    _shortSL   := na
+    _shortTP   := na
+    _shortRisk := na
+
+// ─── Bracket exit + break-even + trailing stop ───────────────────────────────
+if strategy.position_size > 0 and not na(_longRisk)
+    _nextBar = bar_index > strategy.opentrades.entry_bar_index(0)
+    if enableBE and not _fx and _nextBar and close >= strategy.position_avg_price + beTrigR * _longRisk
+        _longBE := true
+    // Track highest close since entry for trailing
+    if na(_maxCloseLong) or close > _maxCloseLong
+        _maxCloseLong := close
+    // Trail SL once trade has progressed by trailTriggerR. Stop never moves down.
+    if enableTrail and not _fx and _nextBar and (close - strategy.position_avg_price) >= trailTriggerR * _longRisk
+        _longTrailArmed := true
+    _longTrailLevel = _longTrailArmed ? _maxCloseLong - trailDistanceR * _longRisk : na
+    _longBaseStop = _longBE ? strategy.position_avg_price : _longSL
+    _longStop     = na(_longTrailLevel) ? _longBaseStop : math.max(_longBaseStop, _longTrailLevel)
+    _longExitComment = _longStop != _longBaseStop ? "trail" : _longBE ? "be" : "sl"
+    // Trail replaces the fixed TP: a TP limit at ≤ trailTriggerR would fill before the trail arms
+    strategy.exit("Long Exit", "Long", stop=_longStop, limit=enableTrail and not _fx ? na : _longTP,
+         comment_profit="tp", comment_loss=_longExitComment)
+
+if strategy.position_size < 0 and not na(_shortRisk)
+    _nextBar = bar_index > strategy.opentrades.entry_bar_index(0)
+    if enableBE and not _fx and _nextBar and close <= strategy.position_avg_price - beTrigR * _shortRisk
+        _shortBE := true
+    // Track lowest close since entry for trailing
+    if na(_minCloseShort) or close < _minCloseShort
+        _minCloseShort := close
+    // Trail SL once trade has progressed by trailTriggerR. Stop never moves up.
+    if enableTrail and not _fx and _nextBar and (strategy.position_avg_price - close) >= trailTriggerR * _shortRisk
+        _shortTrailArmed := true
+    _shortTrailLevel = _shortTrailArmed ? _minCloseShort + trailDistanceR * _shortRisk : na
+    _shortBaseStop = _shortBE ? strategy.position_avg_price : _shortSL
+    _shortStop     = na(_shortTrailLevel) ? _shortBaseStop : math.min(_shortBaseStop, _shortTrailLevel)
+    _shortExitComment = _shortStop != _shortBaseStop ? "trail" : _shortBE ? "be" : "sl"
+    // Trail replaces the fixed TP: a TP limit at ≤ trailTriggerR would fill before the trail arms
+    strategy.exit("Short Exit", "Short", stop=_shortStop, limit=enableTrail and not _fx ? na : _shortTP,
+         comment_profit="tp", comment_loss=_shortExitComment)
+
+// Fixed mode: time limit (reason "time"); stop and target come from the bracket exit above
+if _fx and strategy.position_size != 0 and bar_index - strategy.opentrades.entry_bar_index(0) >= fxTimeBars
+    strategy.close(strategy.position_size > 0 ? "Long" : "Short", comment="time")
+
+// ─── Structural exit (unconfirmed pivot) ─────────────────────────────────────
+_structMinR = _tfSec == 900 ? structMinR15M : _tfSec == 3600 ? structMinR1H : _tfSec == 14400 ? structMinR4H : structMinR1D
+
+if useStructExit and not _fx
+    _potentialHigh = high[1] > high[0] and high[1] > high[2]
+    _potentialLow  = low[1]  < low[0]  and low[1]  < low[2]
+    _longProfitR   = not na(_longRisk)  and _longRisk  > 0 ? (close - strategy.position_avg_price) / _longRisk  : 0.0
+    _shortProfitR  = not na(_shortRisk) and _shortRisk > 0 ? (strategy.position_avg_price - close) / _shortRisk : 0.0
+    if strategy.position_size > 0 and _potentialHigh and _longProfitR >= _structMinR
+        strategy.close("Long", comment="struct")
+    if strategy.position_size < 0 and _potentialLow and _shortProfitR >= _structMinR
+        strategy.close("Short", comment="struct")
+
+
+// ─── Pivot event log (validator reference) ───────────────────────────────────
+// Logs confirmed pivots as reference points. WT signals use barsSinceLowPiv /
+// barsSinceHighPiv to measure proximity — pivot validates signal quality.
+if _plFound
+    log.info(str.format('WT4 PIVOT | dir=long | pivBar={0} | pivLow={1} | pivAtr={2} | wt1={3} | tf={4}',
+         bar_index - pivLen,
+         str.tostring(low[pivLen],  format.mintick),
+         str.tostring(atrVal[pivLen], format.mintick),
+         str.tostring(wt1[pivLen], '#.##'),
+         timeframe.period))
+
+if _phFound
+    log.info(str.format('WT4 PIVOT | dir=short | pivBar={0} | pivHigh={1} | pivAtr={2} | wt1={3} | tf={4}',
+         bar_index - pivLen,
+         str.tostring(high[pivLen], format.mintick),
+         str.tostring(atrVal[pivLen], format.mintick),
+         str.tostring(wt1[pivLen], '#.##'),
+         timeframe.period))
+
+// ─── Entries + Block diagnostics ─────────────────────────────────────────────
+_cooldownOk = na(_lastExitBar) or (
+     bar_index > _lastExitBar and
+     (cooldown == 0 or (bar_index - _lastExitBar) > cooldown))
+
+f_blockReason(sig, cooldownOk, inSession, inDateRange, tfOk, streakBlocked) =>
+    string _r = ""
+    if sig
+        if not cooldownOk
+            _r := "cooldown"
+        else if not inSession
+            _r := "session"
+        else if not inDateRange
+            _r := "dateRange"
+        else if not tfOk
+            _r := "tf"
+        else if streakBlocked
+            _r := "lossStreak"
+    _r
+
+_blockLong  = f_blockReason(longSignal,  _cooldownOk, _inSession, _inDateRange, _tfOk, _streakBlocked)
+_blockShort = f_blockReason(shortSignal, _cooldownOk, _inSession, _inDateRange, _tfOk, _streakBlocked)
+
+if canLong and strategy.position_size == 0 and _blockLong != ""
+    log.info(str.format('WT4 BLOCKED | dir=long | reason={0} | bar={1} | wt1={2} | lowPivBars={3} | close={4} | atr={5} | tf={6}',
+         _blockLong, bar_index,
+         str.tostring(wt1, '#.##'),
+         str.tostring(barsSinceLowPiv),
+         str.tostring(close, format.mintick),
+         str.tostring(atrVal, format.mintick),
+         timeframe.period))
+
+if canShort and strategy.position_size == 0 and _blockShort != ""
+    log.info(str.format('WT4 BLOCKED | dir=short | reason={0} | bar={1} | wt1={2} | highPivBars={3} | close={4} | atr={5} | tf={6}',
+         _blockShort, bar_index,
+         str.tostring(wt1, '#.##'),
+         str.tostring(barsSinceHighPiv),
+         str.tostring(close, format.mintick),
+         str.tostring(atrVal, format.mintick),
+         timeframe.period))
+
+_canTrade = _inSession and _inDateRange and not _streakBlocked and _tfOk
+_longEntry  = longSignal  and canLong  and strategy.position_size == 0 and not _exitLockThisBar and _cooldownOk and _canTrade
+_shortEntry = shortSignal and canShort and strategy.position_size == 0 and not _exitLockThisBar and _cooldownOk and _canTrade
+
+if _longEntry
+    _pendingLongAtr     := atrVal
+    _pendingLowPivBars  := barsSinceLowPiv
+    _pendingHighPivBars := barsSinceHighPiv
+    log.info(str.format('WT4 ENTRY | dir=long | bar={0} | wt1={1} | wt2={2} | osLevel={3} | lowPivBars={4} | highPivBars={5} | atr={6} | signalSL={7} | signalTP={8} | wt1Delta={9} | tpMult={10} | tf={11}',
+         bar_index, str.tostring(wt1, '#.##'), str.tostring(wt2, '#.##'), _osLevel,
+         str.tostring(barsSinceLowPiv), str.tostring(barsSinceHighPiv),
+         str.tostring(atrVal, format.mintick),
+         str.tostring(close - slMult * atrVal, format.mintick),
+         str.tostring(close + _tpMult * atrVal, format.mintick),
+         str.tostring(wt1 - wt1[1], '#.##'), str.tostring(_tpMult, '#.#'),
+         timeframe.period))
+    strategy.entry("Long", strategy.long)
+
+if _shortEntry
+    _pendingShortAtr    := atrVal
+    _pendingLowPivBars  := barsSinceLowPiv
+    _pendingHighPivBars := barsSinceHighPiv
+    log.info(str.format('WT4 ENTRY | dir=short | bar={0} | wt1={1} | wt2={2} | obLevel={3} | lowPivBars={4} | highPivBars={5} | atr={6} | signalSL={7} | signalTP={8} | wt1Delta={9} | tpMult={10} | tf={11}',
+         bar_index, str.tostring(wt1, '#.##'), str.tostring(wt2, '#.##'), _obLevel,
+         str.tostring(barsSinceLowPiv), str.tostring(barsSinceHighPiv),
+         str.tostring(atrVal, format.mintick),
+         str.tostring(close + slMult * atrVal, format.mintick),
+         str.tostring(close - _tpMult * atrVal, format.mintick),
+         str.tostring(wt1 - wt1[1], '#.##'), str.tostring(_tpMult, '#.#'),
+         timeframe.period))
+    strategy.entry("Short", strategy.short)
+// ─── Exit log ────────────────────────────────────────────────────────────────
+varip int _lastLoggedTrade = 0
+if strategy.closedtrades > _lastLoggedTrade
+    for _idx = _lastLoggedTrade to strategy.closedtrades - 1
+        _ep    = strategy.closedtrades.entry_price(_idx)
+        _xp    = strategy.closedtrades.exit_price(_idx)
+        _pnl   = strategy.closedtrades.profit(_idx)
+        _barsH = strategy.closedtrades.exit_bar_index(_idx) - strategy.closedtrades.entry_bar_index(_idx)
+        _mfe   = strategy.closedtrades.max_runup(_idx)
+        _mae   = strategy.closedtrades.max_drawdown(_idx)
+        _size = strategy.closedtrades.size(_idx)
+        _dir  = _size > 0 ? "long" : "short"
+        _eb_idx    = strategy.closedtrades.entry_bar_index(_idx)
+        // Entry-frozen ATR & pivot bars from per-trade arrays (snapshot at fill time).
+        // Robust against Pine's max_bars_back limits — no large dynamic lookbacks.
+        _atrEntry  = array.size(_tradeAtr) > _idx ? array.get(_tradeAtr, _idx) : atrVal
+        _lpbEntry  = array.size(_tradeLpb) > _idx ? array.get(_tradeLpb, _idx) : -1
+        _hpbEntry  = array.size(_tradeHpb) > _idx ? array.get(_tradeHpb, _idx) : -1
+        _riskDenom = math.max(slMult * _atrEntry, syminfo.mintick)
+        _R         = _dir == "long" ? (_xp - _ep) / _riskDenom : (_ep - _xp) / _riskDenom
+        _exitComment = strategy.closedtrades.exit_comment(_idx)
+        _exitReason  = na(_exitComment) or _exitComment == "" ? "unknown" : _exitComment
+        log.info(str.format('WT4 REAL EXIT | tradeId={0} | dir={1} | entryBar={2} | exitBar={3} | entry={4} | exitPx={5} | pnl={6} | R={7} | barsHeld={8} | MFE={9} | MAE={10} | lowPivBars={11} | highPivBars={12} | exitReason={13} | tf={14}',
+             _idx + 1, _dir,
+             _eb_idx,
+             strategy.closedtrades.exit_bar_index(_idx),
+             str.tostring(_ep, format.mintick),
+             str.tostring(_xp, format.mintick),
+             str.tostring(_pnl, '#.##'),
+             str.tostring(_R, '#.##'),
+             _barsH,
+             str.tostring(_mfe, '#.##'),
+             str.tostring(_mae, '#.##'),
+             str.tostring(_lpbEntry),
+             str.tostring(_hpbEntry),
+             _exitReason,
+             timeframe.period))
+    _lastLoggedTrade := strategy.closedtrades
+
+// ─── Plots ───────────────────────────────────────────────────────────────────
+plot(wt1,     "WT",     color=color.new(color.teal,   0), linewidth=2)
+plot(wt2,     "Signal", color=color.new(color.orange, 0), linewidth=1)
+plot(_osLevel, "OS",    color=color.new(#00c853, 50),     linewidth=1)
+plot(_obLevel, "OB",    color=color.new(#d50000, 50),     linewidth=1)
+hline(0, "Zero", color=color.new(color.gray, 60))
+
+// Raw WT cross (dim) — shows signal before gate filtering, pinned to curve
+plotshape(longSignal  and canLong  and not _longEntry  ? wt1 - 6 : na, title="Long Blocked",  style=shape.circle,       location=location.absolute, color=color.new(#00c853, 70), size=size.tiny)
+plotshape(shortSignal and canShort and not _shortEntry ? wt1 + 6 : na, title="Short Blocked", style=shape.circle,       location=location.absolute, color=color.new(#d50000, 70), size=size.tiny)
+// Gated entry — bright arrow pinned to curve
+plotshape(_longEntry  ? wt1 - 8 : na, title="Long Entry",  style=shape.triangleup,   location=location.absolute, color=color.new(#00c853, 0), size=size.tiny)
+plotshape(_shortEntry ? wt1 + 8 : na, title="Short Entry", style=shape.triangledown, location=location.absolute, color=color.new(#d50000, 0), size=size.tiny)
+
+// Price-chart labels with context tooltip
+if showSignals and _longEntry
+    label.new(bar_index, low, '▲',
+         xloc=xloc.bar_index, yloc=yloc.price,
+         style=label.style_label_up, color=color.new(#00c853, 0), textcolor=color.white,
+         size=size.normal, force_overlay=true,
+         tooltip='Long Entry · ' + timeframe.period
+              + '\n────────────'
+              + '\nWT1: '    + str.tostring(wt1, '#.##') + '  WT2: ' + str.tostring(wt2, '#.##') + '  OS: ' + str.tostring(_osLevel)
+              + '\nATR: '    + str.tostring(atrVal, format.mintick)
+              + '\nSL ~'     + str.tostring(close - slMult * atrVal, format.mintick)
+              + '   TP ~'   + str.tostring(close + _tpMult * atrVal, format.mintick)
+              + '\n────────────'
+              + '\nLow pivot:  ' + str.tostring(barsSinceLowPiv)  + ' bars ago'
+              + '\nHigh pivot: ' + str.tostring(barsSinceHighPiv) + ' bars ago')
+
+// ─── Divergence plots ─────────────────────────────────────────────────────────
+_nc = color.new(color.white, 100)
+plot(_divPlFound ? _divOsc[divLbR] : na, "Bull Div",     offset=-divLbR, linewidth=2, color=bullDivCond    ? #00c853                : _nc)
+plot(_divPlFound ? _divOsc[divLbR] : na, "Hid Bull Div", offset=-divLbR, linewidth=2, color=hidBullDivCond ? color.new(#00c853, 60) : _nc)
+plot(_divPhFound ? _divOsc[divLbR] : na, "Bear Div",     offset=-divLbR, linewidth=2, color=bearDivCond    ? #d50000                : _nc)
+plot(_divPhFound ? _divOsc[divLbR] : na, "Hid Bear Div", offset=-divLbR, linewidth=2, color=hidBearDivCond ? color.new(#d50000, 60) : _nc)
+plotshape(bullDivCond    ? _divOsc[divLbR] : na, "Bull",   offset=-divLbR, style=shape.labelup,   location=location.absolute, color=#00c853,                textcolor=color.white, text=" Bull ")
+plotshape(hidBullDivCond ? _divOsc[divLbR] : na, "H Bull", offset=-divLbR, style=shape.labelup,   location=location.absolute, color=color.new(#00c853, 50), textcolor=color.white, text=" H Bull ")
+plotshape(bearDivCond    ? _divOsc[divLbR] : na, "Bear",   offset=-divLbR, style=shape.labeldown, location=location.absolute, color=#d50000,                textcolor=color.white, text=" Bear ")
+plotshape(hidBearDivCond ? _divOsc[divLbR] : na, "H Bear", offset=-divLbR, style=shape.labeldown, location=location.absolute, color=color.new(#d50000, 50), textcolor=color.white, text=" H Bear ")
+plotshape(showDivPivots and _divPhFound ? _divOsc[divLbR] : na, "Div Ph", offset=-divLbR, style=shape.circle, location=location.absolute, color=color.new(color.gray, 40), size=size.tiny)
+plotshape(showDivPivots and _divPlFound ? _divOsc[divLbR] : na, "Div Pl", offset=-divLbR, style=shape.circle, location=location.absolute, color=color.new(color.gray, 40), size=size.tiny)
+
+if showSignals and _shortEntry
+    label.new(bar_index, high, '▼',
+         xloc=xloc.bar_index, yloc=yloc.price,
+         style=label.style_label_down, color=color.new(#d50000, 0), textcolor=color.white,
+         size=size.normal, force_overlay=true,
+         tooltip='Short Entry · ' + timeframe.period
+              + '\n────────────'
+              + '\nWT1: '    + str.tostring(wt1, '#.##') + '  WT2: ' + str.tostring(wt2, '#.##') + '  OB: ' + str.tostring(_obLevel)
+              + '\nATR: '    + str.tostring(atrVal, format.mintick)
+              + '\nSL ~'     + str.tostring(close + slMult * atrVal, format.mintick)
+              + '   TP ~'   + str.tostring(close - _tpMult * atrVal, format.mintick)
+              + '\n────────────'
+              + '\nHigh pivot: ' + str.tostring(barsSinceHighPiv) + ' bars ago'
+              + '\nLow pivot:  ' + str.tostring(barsSinceLowPiv)  + ' bars ago')
+
+// ============================================================================
+// CFD cost model (display only)
+// The tester books no spread, financing or daily premium adjustment: this
+// block deducts them per closed trade and shows the result in its own table.
+// Spread is paid once per trade; financing is charged per calendar night held
+// (a weekend counts as 3 nights, as at the broker). Set the values from the
+// broker's current sheet for the symbol; 0 = cost not applied.
+// ============================================================================
+g_cost = "Cost Model (CFD)"
+cmSpread   = input.float(0.0, "Spread (price points)", minval=0.0, step=0.0001, group=g_cost,
+     tooltip="Full spread paid once per trade, in price points of the symbol. Capital CFDs charge no commission. 0 = not applied.")
+cmFinLong  = input.float(0.0, "Financing Long (% p.a.)", step=0.1, group=g_cost,
+     tooltip="Yearly rate on the position value, charged per calendar night held. Negative = credit. Include the daily premium adjustment for commodities. 0 = not applied.")
+cmFinShort = input.float(0.0, "Financing Short (% p.a.)", step=0.1, group=g_cost,
+     tooltip="As Financing Long, for short positions. Long and short differ at most brokers.")
+cmStress   = input.float(1.5, "Cost Stress Factor", minval=1.0, step=0.1, group=g_cost,
+     tooltip="All costs multiplied by this factor in the second result column. A result that flips under stress does not carry.")
+cmShow     = input.bool(true, "Show Cost Table", group=g_cost)
+
+var int   cmDone     = 0
+var int   cmNights   = 0
+var float cmGross    = 0.0
+var float cmSpreadSum = 0.0
+var float cmFinSum   = 0.0
+var float cmWin      = 0.0
+var float cmLoss     = 0.0
+var float cmWinS     = 0.0
+var float cmLossS    = 0.0
+
+int cmNow = strategy.closedtrades
+if cmNow > cmDone
+    for i = cmDone to cmNow - 1
+        float sz = strategy.closedtrades.size(i)
+        float qty = math.abs(sz)
+        int nights = int(math.max(0, math.floor(strategy.closedtrades.exit_time(i) / 86400000) - math.floor(strategy.closedtrades.entry_time(i) / 86400000)))
+        float rate = (sz > 0 ? cmFinLong : cmFinShort) / 100.0 / 365.0
+        float spr = qty * cmSpread * syminfo.pointvalue
+        float fin = qty * strategy.closedtrades.entry_price(i) * syminfo.pointvalue * rate * nights
+        float pnl = strategy.closedtrades.profit(i)
+        float net = pnl - spr - fin
+        float netS = pnl - cmStress * (spr + fin)
+        cmNights += nights
+        cmGross += pnl
+        cmSpreadSum += spr
+        cmFinSum += fin
+        cmWin += math.max(net, 0)
+        cmLoss += math.max(-net, 0)
+        cmWinS += math.max(netS, 0)
+        cmLossS += math.max(-netS, 0)
+    cmDone := cmNow
+
+var table cmTbl = table.new(position.bottom_left, 3, 9,
+     bgcolor=color.new(color.white, 5), border_color=color.new(color.gray, 60), border_width=1,
+     frame_color=color.new(color.gray, 40), frame_width=1)
+if (barstate.islastconfirmedhistory or barstate.islast) and cmShow
+    color cmTc = color.new(color.gray, 20)
+    color cmHd = color.new(color.gray, 90)
+    bool cmSet = cmSpread != 0.0 or cmFinLong != 0.0 or cmFinShort != 0.0
+    float cmNetB = cmWin - cmLoss
+    float cmNetS = cmWinS - cmLossS
+    string cmPfB = cmLoss > 0 ? str.tostring(cmWin / cmLoss, "#.##") : "–"
+    string cmPfS = cmLossS > 0 ? str.tostring(cmWinS / cmLossS, "#.##") : "–"
+    table.cell(cmTbl, 0, 0, "Cost model", text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 1, 0, "Costs", text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 2, 0, "Stress ×" + str.tostring(cmStress, "#.#"), text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 0, 1, "Status", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 1, cmSet ? "applied" : "NOT SET – cost-free", text_color=cmSet ? cmTc : #ff6f00, text_size=size.small)
+    table.cell(cmTbl, 2, 1, "", text_size=size.small)
+    table.cell(cmTbl, 0, 2, "Trades / avg nights", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 2, str.tostring(cmDone) + " / " + (cmDone > 0 ? str.tostring(cmNights / cmDone, "#.#") : "–"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 2, "", text_size=size.small)
+    table.cell(cmTbl, 0, 3, "Net before costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 3, str.tostring(cmGross, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 3, str.tostring(cmGross, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 4, "Spread", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 4, str.tostring(-cmSpreadSum, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 4, str.tostring(-cmSpreadSum * cmStress, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 5, "Financing", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 5, str.tostring(-cmFinSum, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 5, str.tostring(-cmFinSum * cmStress, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 6, "Net after costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 6, str.tostring(cmNetB, "#.##"), text_color=cmNetB >= 0 ? #00c853 : #d50000, text_size=size.small)
+    table.cell(cmTbl, 2, 6, str.tostring(cmNetS, "#.##"), text_color=cmNetS >= 0 ? #00c853 : #d50000, text_size=size.small)
+    table.cell(cmTbl, 0, 7, "Profit factor after costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 7, cmPfB, text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 7, cmPfS, text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 8, "Tester columns exclude these costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 8, "", text_size=size.small)
+    table.cell(cmTbl, 2, 8, "", text_size=size.small)
+
+// ============================================================================
+// Random baseline (shadow test, display only — no orders)
+// The strategy's own entries and a random set with the same side and the same
+// frequency are both replayed here with one identical fixed exit (ATR target,
+// ATR stop, time limit), gross in R, long and short apart. A signal that does
+// not beat the random set under the same exit carries no information of its
+// own. The random trigger rate is the running signal rate of this chart
+// (causal); the seed is fixed, so the set repeats. One seed is one draw: with
+// few trades the difference is noise. Set target/stop/time like the strategy's
+// Fixed exit to compare against its own result.
+// ============================================================================
+g_rb = "Random Baseline"
+rbOn     = input.bool(true, "Show Random Baseline", group=g_rb,
+     tooltip="Replays signal entries and random entries with one fixed exit and compares them per side. Display only.")
+rbTp     = input.float(2.0, "Baseline Target (ATR×)", minval=0.1, step=0.1, group=g_rb)
+rbSl     = input.float(1.5, "Baseline Stop (ATR×)",   minval=0.1, step=0.1, group=g_rb)
+rbBars   = input.int(24, "Baseline Time Limit (Bars)", minval=1, group=g_rb)
+rbSeed   = input.int(42, "Random Seed", group=g_rb,
+     tooltip="Fixed seed: the random set is the same on every load. Change it to see how much one draw varies.")
+rbAtrLen = input.int(14, "Baseline ATR Length", minval=1, group=g_rb)
+
+// One simulated side: enters at the open after the trigger, one trade at a time,
+// returns the trade result in R on the bar it closes (na otherwise). Stop wins a same-bar tie.
+rbTrack(bool trig, bool isLong, float atrV, float tpM, float slM, int tb) =>
+    var bool  inT  = false
+    var bool  pend = false
+    var float pAtr = na
+    var float ep   = na
+    var float stp  = na
+    var float tgt  = na
+    var float risk = na
+    var int   held = 0
+    float res = na
+    if pend and not inT
+        ep := open
+        risk := slM * pAtr
+        stp := isLong ? ep - risk : ep + risk
+        tgt := isLong ? ep + tpM * pAtr : ep - tpM * pAtr
+        inT := true
+        held := 0
+        pend := false
+    else if inT
+        held += 1
+    if inT
+        bool hitS = isLong ? low <= stp : high >= stp
+        bool hitT = isLong ? high >= tgt : low <= tgt
+        if hitS
+            res := -1.0
+        else if hitT
+            res := tpM / slM
+        else if held >= tb
+            res := (isLong ? close - ep : ep - close) / risk
+        if not na(res)
+            inT := false
+    if trig and not inT and not pend
+        pend := true
+        pAtr := atrV
+    res
+
+bool rbEligible = _canTrade and barstate.isconfirmed
+bool rbSigL = longSignal and canLong and rbEligible
+bool rbSigS = shortSignal and canShort and rbEligible
+var int rbCntL = 0
+var int rbCntS = 0
+var int rbEligibleBars = 0
+if rbEligible
+    rbEligibleBars += 1
+if rbSigL
+    rbCntL += 1
+if rbSigS
+    rbCntS += 1
+float rbRateL = rbEligibleBars > 0 ? rbCntL / float(rbEligibleBars) : 0.0
+float rbRateS = rbEligibleBars > 0 ? rbCntS / float(rbEligibleBars) : 0.0
+float rbU1 = math.random(0, 1, rbSeed)
+float rbU2 = math.random(0, 1, rbSeed + 1000)
+float rbAtr = ta.atr(rbAtrLen)
+
+float rbRSL = rbTrack(rbSigL, true,  rbAtr, rbTp, rbSl, rbBars)
+float rbRRL = rbTrack(rbEligible and rbU1 < rbRateL, true,  rbAtr, rbTp, rbSl, rbBars)
+float rbRSS = rbTrack(rbSigS, false, rbAtr, rbTp, rbSl, rbBars)
+float rbRRS = rbTrack(rbEligible and rbU2 < rbRateS, false, rbAtr, rbTp, rbSl, rbBars)
+
+var int   rbNSL = 0
+var int   rbNRL = 0
+var int   rbNSS = 0
+var int   rbNRS = 0
+var float rbSumSL = 0.0
+var float rbSumRL = 0.0
+var float rbSumSS = 0.0
+var float rbSumRS = 0.0
+var int   rbWinSL = 0
+var int   rbWinRL = 0
+var int   rbWinSS = 0
+var int   rbWinRS = 0
+if not na(rbRSL)
+    rbNSL += 1
+    rbSumSL += rbRSL
+    rbWinSL += rbRSL > 0 ? 1 : 0
+if not na(rbRRL)
+    rbNRL += 1
+    rbSumRL += rbRRL
+    rbWinRL += rbRRL > 0 ? 1 : 0
+if not na(rbRSS)
+    rbNSS += 1
+    rbSumSS += rbRSS
+    rbWinSS += rbRSS > 0 ? 1 : 0
+if not na(rbRRS)
+    rbNRS += 1
+    rbSumRS += rbRRS
+    rbWinRS += rbRRS > 0 ? 1 : 0
+
+var table rbTbl = table.new(position.top_left, 4, 8,
+     bgcolor=color.new(color.white, 5), border_color=color.new(color.gray, 60), border_width=1,
+     frame_color=color.new(color.gray, 40), frame_width=1)
+if (barstate.islastconfirmedhistory or barstate.islast) and rbOn
+    color rbTc = color.new(color.gray, 20)
+    color rbHd = color.new(color.gray, 90)
+    float rbAvgSL = rbNSL > 0 ? rbSumSL / rbNSL : na
+    float rbAvgRL = rbNRL > 0 ? rbSumRL / rbNRL : na
+    float rbAvgSS = rbNSS > 0 ? rbSumSS / rbNSS : na
+    float rbAvgRS = rbNRS > 0 ? rbSumRS / rbNRS : na
+    float rbDL = rbAvgSL - rbAvgRL
+    float rbDS = rbAvgSS - rbAvgRS
+    table.cell(rbTbl, 0, 0, "Fixed-exit baseline (gross R)", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 1, 0, "n", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 2, 0, "Win %", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 3, 0, "avg R", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 0, 1, "Long – signal", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 1, str.tostring(rbNSL), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 1, rbNSL > 0 ? str.tostring(100.0 * rbWinSL / rbNSL, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 1, na(rbAvgSL) ? "–" : str.tostring(rbAvgSL, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 2, "Long – random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 2, str.tostring(rbNRL), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 2, rbNRL > 0 ? str.tostring(100.0 * rbWinRL / rbNRL, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 2, na(rbAvgRL) ? "–" : str.tostring(rbAvgRL, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 3, "Long – signal minus random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 3, "", text_size=size.small)
+    table.cell(rbTbl, 2, 3, "", text_size=size.small)
+    table.cell(rbTbl, 3, 3, na(rbDL) ? "–" : str.tostring(rbDL, "#.##"), text_color=na(rbDL) ? rbTc : (rbDL >= 0 ? #00c853 : #d50000), text_size=size.small)
+    table.cell(rbTbl, 0, 4, "Short – signal", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 4, str.tostring(rbNSS), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 4, rbNSS > 0 ? str.tostring(100.0 * rbWinSS / rbNSS, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 4, na(rbAvgSS) ? "–" : str.tostring(rbAvgSS, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 5, "Short – random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 5, str.tostring(rbNRS), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 5, rbNRS > 0 ? str.tostring(100.0 * rbWinRS / rbNRS, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 5, na(rbAvgRS) ? "–" : str.tostring(rbAvgRS, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 6, "Short – signal minus random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 6, "", text_size=size.small)
+    table.cell(rbTbl, 2, 6, "", text_size=size.small)
+    table.cell(rbTbl, 3, 6, na(rbDS) ? "–" : str.tostring(rbDS, "#.##"), text_color=na(rbDS) ? rbTc : (rbDS >= 0 ? #00c853 : #d50000), text_size=size.small)
+    table.cell(rbTbl, 0, 7, "Gross, no costs · one seed · n < 30 is a hint", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 7, "", text_size=size.small)
+    table.cell(rbTbl, 2, 7, "", text_size=size.small)
+    table.cell(rbTbl, 3, 7, "", text_size=size.small)

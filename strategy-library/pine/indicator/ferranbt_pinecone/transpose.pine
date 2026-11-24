@@ -1,0 +1,35 @@
+//@version=5
+indicator("matrix/transpose")
+// Test matrix transpose
+m = matrix.new<float>(2, 3, 0.0)
+matrix.set(m, 0, 0, 1.0)
+matrix.set(m, 0, 1, 2.0)
+matrix.set(m, 0, 2, 3.0)
+matrix.set(m, 1, 0, 4.0)
+matrix.set(m, 1, 1, 5.0)
+matrix.set(m, 1, 2, 6.0)
+
+// Original: 2 rows, 3 columns
+log.info(str.tostring(matrix.rows(m)))
+log.info(str.tostring(matrix.columns(m)))
+
+// Transpose
+mt = matrix.transpose(m)
+
+// Transposed: 3 rows, 2 columns
+log.info(str.tostring(matrix.rows(mt)))
+log.info(str.tostring(matrix.columns(mt)))
+
+// Check transposed values
+log.info(str.tostring(matrix.get(mt, 0, 0)))
+log.info(str.tostring(matrix.get(mt, 1, 0)))
+log.info(str.tostring(matrix.get(mt, 2, 1)))
+
+// Expected output:
+// 2
+// 3
+// 3
+// 2
+// 1
+// 2
+// 6

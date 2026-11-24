@@ -1,0 +1,99 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © swoozshies
+
+import mentalRock19315/Slope_TK/1 as TK
+
+//@version=5
+indicator("MA Based Trend BarColor", shorttitle = "MA_TREND_BARCOLOR", overlay=true)
+
+getAverageType(averageType, averageSource, averageLength) =>
+	switch str.upper(averageType)
+        "SMA"  => ta.sma(averageSource, averageLength)
+        "EMA"  => ta.ema(averageSource, averageLength)
+        "VWMA" => ta.vwma(averageSource, averageLength)
+        => runtime.error("Moving average type '" + averageType + "' not found!"), na
+
+a_type = input.string("SMA", "high timeframe", ["SMA","EMA","VWMA"], "", "1", "")
+b_type = input.string("EMA", "med timeframe", ["SMA","EMA","VWMA"], "", "2", "")
+c_type = input.string("EMA", "low timeframe", ["SMA","EMA","VWMA"], "", "3", "")
+
+a_length = input.int(defval = 105, title = "length", group ="", inline = "1")
+b_length = input.int(defval = 45, title = "length", group ="", inline = "2")
+c_length = input.int(defval = 9, title = "length", group ="", inline = "3")
+
+a_series = input.string("close", "source", ["open","close","hlc3"], "", "1", "")
+b_series = input.string("close", "source", ["open","close","hlc3"], "", "2", "")
+c_series = input.string("close", "source", ["open","close","hlc3"], "", "3", "")
+
+getSeries(seriesName) =>
+	switch str.upper(seriesName)
+        "CLOSE"  => close
+        "OPEN"  => open
+        "HLC3"  => hlc3
+        => runtime.error("Series '" + seriesName + "' not found!"), na
+
+a = getAverageType(a_type, getSeries(a_series), a_length)
+b = getAverageType(b_type, getSeries(b_series), b_length)
+c = getAverageType(c_type, getSeries(c_series), c_length)
+
+ht_color = input.color(color.red, "Color", inline = "1")
+mt_color = input.color(color.orange, "Color", inline = "2")
+lt_color = input.color(color.green, "Color", inline = "3")
+
+p1 = plot(a, "slow MA", color=ht_color)
+p2 = plot(b, "mid MA", color=mt_color)
+p3 = plot(c, "fast MA", color=lt_color)
+
+state_one = c > b and b > a
+state_two = b > c and c > a
+state_three = a > c and c > b
+state_four = a > b and b > c
+
+var color_maxup = input.color(color.new(color.green, 0), "bullish", group = "Trend-based Bar Color")
+var color_up = input.color(color.new(color.blue, 0), "bullish-neutral", group = "Trend-based Bar Color")
+var color_maxdown = input.color(color.new(color.red, 0), "bearish", group = "Trend-based Bar Color")
+var color_down = input.color(color.new(color.orange, 0), "bearish-neutral", group = "Trend-based Bar Color")
+var color_undefined = color.new(color.gray, 30)
+
+volume_color = if state_one
+    color_maxup
+else if state_two
+    color_up
+else if state_three
+    color_down
+else if state_four
+    color_maxdown
+else
+    color_undefined
+
+bodyColor = close > open ? na : volume_color
+
+// barcolor(volume_color)
+// plotcandle(open, high, low, close, color=bodyColor, wickcolor = volume_color, bordercolor = volume_color)
+
+// alertcondition(barstate.isconfirmed and volume_color != volume_color[1], "MA-based Trend Changed Alert", "Moving Average based Trend has changed.")
+
+band_color = c > b ? color.new(color.green, 95) : color.new(color.red, 95)
+fill(p3, p2, band_color)
+// fill(p3, p2, color.new(color.gray, 90))
+
+// var string GP2 = "MA Slope Summary"
+// string  tableYposInput = input.string("top", "Panel position", inline = "11", options = ["top", "middle", "bottom"], group = GP2)
+// string  tableXposInput = input.string("right", "", inline = "11", options = ["left", "center", "right"], group = GP2)
+// slope_length = input.int(5, title = "Lookback", tooltip = "Lookback when computing MA slopes")
+
+// slow_slope = TK.slope(a, slope_length)
+// mid_slope = TK.slope(b, slope_length)
+// fast_slope = TK.slope(c, slope_length)
+
+// var table panel = table.new(tableYposInput + "_" + tableXposInput, 2, 5)//, border_color = color.black, border_width = 1)
+
+// if barstate.islast
+//     table.cell(panel, 0, 1, text = "", text_size = size.small)
+//     table.cell(panel, 1, 1, "slope", text_color = color_undefined, text_size = size.small, text_halign = text.align_right)
+//     table.cell(panel, 0, 4, text = a_type + "-" + str.tostring(a_length), text_size = size.small)
+//     table.cell(panel, 1, 4, str.tostring(slow_slope, "0.00"), text_color = slow_slope > 0 ? color_up : color_down, text_size = size.large, text_halign = text.align_right)
+//     table.cell(panel, 0, 3, text = b_type + "-" + str.tostring(b_length), text_size = size.small)
+//     table.cell(panel, 1, 3, str.tostring(mid_slope, "0.00"), text_color = mid_slope > 0 ? color_up : color_down, text_size = size.large, text_halign = text.align_right)
+//     table.cell(panel, 0, 2, text = c_type + "-" + str.tostring(c_length), text_size = size.small)
+//     table.cell(panel, 1, 2, str.tostring(fast_slope, "0.00"), text_color = fast_slope > 0 ? color_up : color_down, text_size = size.large, text_halign = text.align_right)

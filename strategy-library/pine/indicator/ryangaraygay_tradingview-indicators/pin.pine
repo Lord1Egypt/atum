@@ -1,0 +1,82 @@
+//@version=5
+indicator("PIN BAR", shorttitle="PIN", overlay=true, max_labels_count=500)
+
+// inputs
+atrRange = input.int(5, "ATR Length", tooltip="Bar size must be greater than this ATR to ignore small candles")
+wickRatio = input.float(0.66, "Major Wick To Bar Height Ratio", tooltip="How much larger the signal wicks should be compared to whole candle for a strong PIN")
+wickRatio2 = input.float(0.40, "Minor Wick To Bar Height Ratio", tooltip="How much larger the signal wicks should be compared to whole candle for a medium PIN")
+min_volume_threshold = input.int(1000, "Minimum Volume Threshold")
+standout_lookback = input.int(5, title = "Standout lookback", tooltip = "Number of bars to lookback to check if the pin nose/tail stands out.")
+
+upperWickSize = high - math.max(open, close)
+lowerWickSize = math.min(open, close) - low
+bodySize = math.abs(close - open)
+
+priorBarUp = close[1]>open[1]
+priorBarDown = not priorBarUp
+priorBodyBigEnough = bodySize[1] >= (ta.ema(bodySize, atrRange) - ta.stdev(bodySize, atrRange))
+
+barSize = high - low
+isBarLarge = barSize >= ta.atr(atrRange)// + ta.stdev(barSize, atrRange)
+isBarAverageSize = barSize >= ta.atr(atrRange) - ta.stdev(barSize, atrRange)
+
+midpoint = (high - low) / 2
+closeSize = close - low
+closeBelowMidpoint = (closeSize <= midpoint)
+closeAboveMidpoint = (closeSize >= midpoint)
+
+min_volume_met = volume > min_volume_threshold
+
+var color_maxup = input.color(color.new(color.lime, 0), "bullish", group = "Signal Color")
+var color_maxdown = input.color(color.new(color.red, 0), "bearish", group = "Signal Color")
+
+downPinColor = color_maxdown
+upPinColor = color_maxup
+
+bodyWithinPriorBar = math.max(open, close) <= high[1] and math.min(open, close) >= low[1]
+
+isStandoutHigh = ta.highest(standout_lookback)[1] < high
+isStandoutLow = ta.lowest(standout_lookback)[1] > low
+
+commonRules = priorBodyBigEnough and min_volume_met and bodyWithinPriorBar
+commonRulesH = commonRules and closeBelowMidpoint and priorBarUp and isStandoutHigh
+commonRulesL = commonRules and closeAboveMidpoint and priorBarDown and isStandoutLow
+
+// stronger/stricter pins
+pinbar_h = commonRulesH and upperWickSize >= wickRatio*barSize and isBarLarge
+pinbar_l = commonRulesL and lowerWickSize >= wickRatio*barSize and isBarLarge
+
+// // weaker pins
+shootingstar = commonRulesH and upperWickSize >= wickRatio2*barSize and not pinbar_h and isBarAverageSize
+hammer = commonRulesL and lowerWickSize >= wickRatio2*barSize and not pinbar_l and isBarAverageSize
+
+pinbar_h2 = shootingstar
+pinbar_l2 = hammer
+
+// d = array.new<string>(0)
+// array.push(d, str.tostring(priorBodyBigEnough) + "\n")
+// array.push(d, str.tostring(min_volume_met) + "\n")
+// array.push(d, str.tostring(bodyWithinPriorBar) + "\n")
+// array.push(d, str.tostring(closeAboveMidpoint) + "\n")
+// array.push(d, str.tostring(priorBarDown) + "\n")
+// array.push(d, str.tostring(isBarAverageSize) + "\n")
+// label.new(bar_index, high, str.tostring(d))
+
+barComplete = barstate.isconfirmed
+
+plotshape(barComplete and pinbar_h,style=shape.triangledown,color=downPinColor, size = size.normal)
+plotshape(barComplete and pinbar_l,style=shape.triangleup,color=upPinColor,location=location.belowbar, size = size.normal)
+
+plotshape(barComplete and pinbar_h2,style=shape.triangledown,color=downPinColor, size = size.tiny)
+plotshape(barComplete and pinbar_l2,style=shape.triangleup,color=upPinColor,location=location.belowbar, size = size.tiny)
+
+failed_newlow = close > low[1]
+failed_newhigh = close < high[1]
+ipin_up = commonRules and priorBarDown and closeBelowMidpoint and upperWickSize >= wickRatio*barSize and isBarLarge and failed_newlow
+ipin_down = commonRules and priorBarUp and closeAboveMidpoint and lowerWickSize >= wickRatio*barSize and isBarLarge and failed_newhigh
+
+plotchar(barComplete and ipin_up,char='⬆',color=upPinColor,location=location.belowbar, size = size.tiny)
+plotchar(barComplete and ipin_down,char='⬇',color=downPinColor,location=location.abovebar, size = size.tiny)
+
+alertcondition(barComplete and pinbar_h or pinbar_h2 or ipin_down, "Bearish PIN alert", "A bearish/down PIN candle was detected.")
+alertcondition(barComplete and pinbar_l or pinbar_l2 or ipin_up, "Bullish PIN alert", "A bullish/up PIN candle was detected.")

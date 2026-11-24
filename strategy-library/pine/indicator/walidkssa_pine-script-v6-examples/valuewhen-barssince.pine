@@ -1,0 +1,35 @@
+// Pine Script ta.valuewhen and ta.barssince examples
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/valuewhen-barssince
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Since the last signal", overlay = true)
+
+fastLen = input.int(20, "Fast EMA", minval = 1)
+slowLen = input.int(50, "Slow EMA", minval = 2)
+
+fast = ta.ema(close, fastLen)
+slow = ta.ema(close, slowLen)
+bullCross = ta.crossover(fast, slow)
+
+// Close at the most recent cross, and at the one before it
+float lastCrossClose = ta.valuewhen(bullCross, close, 0)
+float prevCrossClose = ta.valuewhen(bullCross, close, 1)
+// Bars since the most recent cross: 0 on the cross bar, na before the first one
+int barsSince = ta.barssince(bullCross)
+
+// Highest high since the cross, kept with var instead of a lookback
+var float highSince = na
+if bullCross
+    highSince := high
+else if not na(highSince)
+    highSince := math.max(highSince, high)
+
+float movePct     = (close - lastCrossClose) / lastCrossClose * 100
+bool  higherCross = bullCross and lastCrossClose > prevCrossClose
+
+plot(lastCrossClose, "Close at the last cross", color.blue, style = plot.style_stepline)
+plot(highSince, "Highest high since the cross", color.teal, style = plot.style_stepline)
+plotshape(bullCross, "Bullish cross", shape.triangleup, location.belowbar, higherCross ? color.teal : color.gray, size = size.small)
+plot(barsSince, "Bars since the cross", display = display.data_window)
+plot(movePct, "% move since the cross", display = display.data_window)

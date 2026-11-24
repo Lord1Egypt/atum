@@ -1,0 +1,54 @@
+//@version=6
+// Fair value gap retest with a 50 EMA trend filter, ATR stop and R target.
+// Long: price trades back into a bullish FVG while close is above the 50 EMA. Short: the mirror.
+// A bullish FVG is a 3-candle gap where the low of candle 3 is above the high of candle 1.
+// Backtested with 2R vs 3R targets: https://wickcheck.com/blog/fvg-target-2r-vs-3r/
+strategy("FVG retest with 50 EMA filter", overlay = true, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, commission_type = strategy.commission.percent, commission_value = 0.01, slippage = 1)
+
+emaLen  = input.int(50, "Trend EMA length")
+atrMult = input.float(1.5, "Stop distance (x ATR)", step = 0.25)
+rr      = input.float(3.0, "Target (R)", step = 0.5)
+maxAge  = input.int(50, "Forget a gap after N bars", minval = 1)
+
+ema = ta.ema(close, emaLen)
+atr = ta.atr(14)
+
+// most recent unfilled gaps
+var float bullTop = na
+var float bullBot = na
+var float bearTop = na
+var float bearBot = na
+var int bullAge = 0
+var int bearAge = 0
+if low > high[2]
+    bullTop := low
+    bullBot := high[2]
+    bullAge := 0
+if high < low[2]
+    bearTop := low[2]
+    bearBot := high
+    bearAge := 0
+bullAge += 1
+bearAge += 1
+
+longSig  = not na(bullTop) and bullAge > 1 and bullAge <= maxAge and low <= bullTop and close >= bullBot and close > ema
+shortSig = not na(bearTop) and bearAge > 1 and bearAge <= maxAge and high >= bearBot and close <= bearTop and close < ema
+
+var float sd = na
+if strategy.position_size == 0
+    if longSig
+        sd := atrMult * atr
+        strategy.entry("Long", strategy.long)
+        bullTop := na
+    else if shortSig
+        sd := atrMult * atr
+        strategy.entry("Short", strategy.short)
+        bearTop := na
+
+ep = strategy.position_avg_price
+if strategy.position_size > 0
+    strategy.exit("L exit", "Long", stop = ep - sd, limit = ep + rr * sd)
+if strategy.position_size < 0
+    strategy.exit("S exit", "Short", stop = ep + sd, limit = ep - rr * sd)
+
+plot(ema, "EMA", color = color.gray)

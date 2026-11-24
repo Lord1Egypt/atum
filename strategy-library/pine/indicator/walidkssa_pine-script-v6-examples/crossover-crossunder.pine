@@ -1,0 +1,42 @@
+// Pine Script crossover and crossunder conditions (v6)
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/crossover-crossunder
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Crossover conditions", overlay = true)
+
+fastLen = input.int(10, "Fast SMA", minval = 1)
+slowLen = input.int(30, "Slow SMA", minval = 2)
+rsiLen  = input.int(14, "RSI length", minval = 2)
+within  = input.int(5, "Recent cross = within N bars", minval = 1)
+
+fast = ta.sma(close, fastLen)
+slow = ta.sma(close, slowLen)
+rsi  = ta.rsi(close, rsiLen)
+
+// 1. Events: true on the single bar of the cross
+bullCross = ta.crossover(fast, slow)
+bearCross = ta.crossunder(fast, slow)
+anyCross  = ta.cross(fast, slow)
+
+// 2. State: true on every bar while the fast average is above
+fastAbove = fast > slow
+
+// 3. A line crossing a fixed level: RSI back above 30
+rsiUp30 = ta.crossover(rsi, 30)
+
+// 4. Recency: bars since the last bullish cross (na before the first one)
+sinceBull  = ta.barssince(bullCross)
+recentBull = not na(sinceBull) and sinceBull <= within
+
+// 5. Combined: RSI leaves oversold shortly after a bullish cross, while it still holds
+setup = rsiUp30 and recentBull and fastAbove
+
+plot(fast, "Fast SMA", color.teal)
+plot(slow, "Slow SMA", color.orange)
+bgcolor(fastAbove ? color.new(color.teal, 93) : color.new(color.red, 93), title = "State")
+plotshape(bullCross, "Bullish cross", shape.triangleup, location.belowbar, color.teal, size = size.small)
+plotshape(bearCross, "Bearish cross", shape.triangledown, location.abovebar, color.red, size = size.small)
+plotshape(setup, "Setup", shape.diamond, location.bottom, color.blue, size = size.small)
+plot(anyCross ? 1 : 0, "Any cross", display = display.data_window)
+alertcondition(setup, "Setup", "RSI left oversold after a recent bullish SMA cross on {{ticker}}")

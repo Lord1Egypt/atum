@@ -1,0 +1,1485 @@
+//@version=6
+// ============================================================================
+// VWAP Cross Visuals [WavesUnchained]
+// Version: 2.4.1
+// Author: WavesUnchained
+// Build: 2026-11-17
+// ============================================================================
+// Session and pivot-anchored VWAPs with cross markers and VWAP clusters, plus optional zone, VWAP-band, volume-profile and higher-timeframe slope layers. It shows where price stands relative to VWAP; it does not grade setups or emit trade signals.
+//
+// Features:
+//   ✓ Session VWAP (resets daily)
+//   ✓ Anchored VWAP High / Low (pivot-anchored)
+//   ✓ Price × session VWAP cross markers (crosses caused by the session reset are excluded)
+//   ✓ VWAP structure crosses (session vs anchored)
+//   ✓ Multi-VWAP cluster detection
+//   ✓ Marker throttling to prevent clutter
+//   ✓ Three display modes: Smart / Price Only / Cluster Only
+//   ✓ Optional zones, ATR/σ bands around VWAP, volume profile (POC/VA), HTF EMA slope panel
+//   ✓ HTF values from the last closed HTF bar (no repaint), event alerts on the confirmed bar
+//
+// Data Contract:
+//   Price:     REQUIRED   chart symbol
+//   Volume:    REQUIRED   real trade volume — feed must deliver volume and
+//                         syminfo.volumetype must not be "tick"; otherwise not available
+//   OI:        NO
+//   Reference: NO
+//   Verdict:   Exchange-only
+//
+// ============================================================================
+indicator("VWAP Cross Visuals [WavesUnchained]",
+         overlay=true,
+         max_labels_count=200,
+         max_boxes_count=100,
+         max_lines_count=500)
+
+// ============================================================================
+
+// ============================================================================
+// MODULES:
+// - inputs.pine
+// - core.pine
+// - visualization.pine
+// ============================================================================
+
+// NOTE: Modules are combined by the build system.
+
+// ============================================================================
+// INLINE MODULES (Combined at build time)
+// ============================================================================
+
+// ============================================================================
+// MODULE: rta_local
+// ============================================================================
+
+// ============================================================================
+// LOCAL RTA CORE (inline for VWAP Cross Visuals)
+// NOTE: Sourced from rta-market-structure and rta-framework modules.
+// ============================================================================
+
+// ============================================================================
+// RTA CORE - VWAP Detection Engine
+// ============================================================================
+
+// Comprehensive VWAP analysis: Session, Anchored, Cross detection, Clusters
+//
+// Features:
+// - Session VWAP calculation and tracking
+// - Anchored VWAP from pivot highs/lows
+// - Price vs VWAP cross detection
+// - VWAP structure crosses (session vs anchored)
+// - Multi-VWAP cluster detection
+// - Marker throttling
+// - Position of price relative to the session VWAP
+//
+// Author: RedefiningTechnicalAnalysis
+// Version: 1.0
+// ============================================================================
+
+// === VWAP DATA TYPES ===
+
+type VwapConfig
+    // Pivot settings for anchored VWAP
+    int pivotLeftBars
+    int pivotRightBars
+
+    // Cluster detection
+    float clusterTolerancePercent
+
+    // Marker throttling
+    int minBarsBetweenSignals
+
+    // Cross detection sensitivity
+    float crossThreshold
+
+    // Display preferences
+    bool enableThrottling
+    bool detectClusters
+
+type VwapState
+    // Session VWAP
+    float sessionVwap
+    float sessionVwapPrev
+
+    // Anchored VWAPs
+    float anchoredVwapHigh
+    float anchoredVwapLow
+    bool hasAnchoredHigh
+    bool hasAnchoredLow
+
+    // Price crosses
+    bool priceCrossUp
+    bool priceCrossDown
+    bool canShowPriceCross
+
+    // Structure crosses
+    bool structureCrossUp
+    bool structureCrossDown
+    bool canShowStructureCross
+
+    // Cluster detection
+    bool isClusterActive
+    bool canShowCluster
+    float clusterTolerance
+    bool vwapsInCluster
+    bool priceInCluster
+
+    // Position relative to the session VWAP
+    int priceVwapPosition  // 1=above, -1=below, 0=at
+    float priceVwapDistance
+    float priceVwapDistancePercent
+
+// Persistent storage for anchored VWAP calculation
+type VwapAnchors
+    // Cumulative volume-price data
+    float cumulativePV
+    float cumulativeV
+
+    // Anchor points for high pivots
+    float anchorPV_High
+    float anchorV_High
+    bool hasHighAnchor
+
+    // Anchor points for low pivots
+    float anchorPV_Low
+    float anchorV_Low
+    bool hasLowAnchor
+
+    // Throttling state
+    int lastPriceCrossBar
+    int lastStructureCrossBar
+    int lastClusterBar
+
+// === CONFIGURATION HELPERS ===
+
+newVwapConfig() =>
+    VwapConfig.new(5, 5, 0.3, 50, 0.1, true, true)
+
+newVwapAnchors() =>
+    VwapAnchors.new(0.0, 0.0, na, na, false, na, na, false, na, na, na)
+// === SESSION VWAP FUNCTIONS ===
+
+// sessionReset is the one anchor for the session VWAP and for the cross reset
+calcSessionVwap(bool sessionReset) =>
+    ta.vwap(close, sessionReset)
+
+getPreviousSessionVwap(float sessionVwap) =>
+    sessionVwap[1]
+
+// === ANCHORED VWAP FUNCTIONS ===
+
+updateVwapAnchors(VwapAnchors anchors, VwapConfig config, float vol) =>
+    // Update cumulative volume-price data. A bar with na volume adds 0, so one
+    // missing bar cannot turn the running sums na for the rest of the chart.
+    float volOrZero = nz(vol)
+    anchors.cumulativePV += close * volOrZero
+    anchors.cumulativeV += volOrZero
+
+    // Cumulative values as of the pivot bar (pivotRightBars ago).
+    // NOTE: history-referencing the anchors object (anchors[n]) would return the
+    // CURRENT field values because the same object is mutated in place — so the
+    // window sums are subtracted instead. Computed unconditionally (ta consistency).
+    float pvAtPivot = anchors.cumulativePV - math.sum(close * volOrZero, config.pivotRightBars)
+    float vAtPivot  = anchors.cumulativeV - math.sum(volOrZero, config.pivotRightBars)
+
+    // Detect new pivot points
+    float pivotHigh = ta.pivothigh(high, config.pivotLeftBars, config.pivotRightBars)
+    float pivotLow = ta.pivotlow(low, config.pivotLeftBars, config.pivotRightBars)
+
+    // Update high anchor when new pivot high found
+    if not na(pivotHigh)
+        anchors.anchorPV_High := pvAtPivot
+        anchors.anchorV_High := vAtPivot
+        anchors.hasHighAnchor := true
+
+    // Update low anchor when new pivot low found
+    if not na(pivotLow)
+        anchors.anchorPV_Low := pvAtPivot
+        anchors.anchorV_Low := vAtPivot
+        anchors.hasLowAnchor := true
+
+    anchors
+
+calcAnchoredVwap(VwapAnchors anchors, bool isHigh) =>
+    if isHigh and anchors.hasHighAnchor
+        denominator = anchors.cumulativeV - anchors.anchorV_High
+        denominator == 0.0 ? na : (anchors.cumulativePV - anchors.anchorPV_High) / denominator
+    else if not isHigh and anchors.hasLowAnchor
+        denominator = anchors.cumulativeV - anchors.anchorV_Low
+        denominator == 0.0 ? na : (anchors.cumulativePV - anchors.anchorPV_Low) / denominator
+    else
+        na
+// === CROSS DETECTION FUNCTIONS ===
+
+// Cross = change of the last strict side of a vs b. The side memory is cleared
+// when the session VWAP resets, so the VWAP jump at the session start — and the
+// first side established after it — never counts as a cross. Each call site
+// keeps its own side memory.
+sideCross(float a, float b, bool reset) =>
+    var int lastSide = 0
+    int side = 0
+    if not na(a) and not na(b)
+        side := a > b ? 1 : a < b ? -1 : 0
+    if reset
+        lastSide := 0
+    bool crossUp = side == 1 and lastSide == -1
+    bool crossDown = side == -1 and lastSide == 1
+    if side != 0
+        lastSide := side
+    [crossUp, crossDown]
+
+detectPriceCrosses(float sessionVwap, bool sessionReset) =>
+    [crossUp, crossDown] = sideCross(close, sessionVwap, sessionReset)
+    [crossUp, crossDown]
+
+detectStructureCrosses(float sessionVwap, float anchoredHigh, float anchoredLow, bool sessionReset, bool highReanchor, bool lowReanchor) =>
+    // Session VWAP crosses anchored VWAP levels. A re-anchor on a new pivot makes
+    // the anchored VWAP jump, so it clears that side memory like a session reset.
+    [crossUpHigh, crossDownHigh] = sideCross(sessionVwap, anchoredHigh, sessionReset or highReanchor)
+    [crossUpLow, crossDownLow] = sideCross(sessionVwap, anchoredLow, sessionReset or lowReanchor)
+    [crossUpHigh or crossUpLow, crossDownHigh or crossDownLow]
+
+// === CLUSTER DETECTION FUNCTIONS ===
+
+detectVwapCluster(float sessionVwap, float anchoredHigh, float anchoredLow, VwapConfig config) =>
+    clusterTolerance = (config.clusterTolerancePercent / 100.0) * close
+
+    // Check if anchored VWAPs are close to each other
+    vwapsInCluster = not na(anchoredHigh) and not na(anchoredLow) and math.abs(anchoredHigh - anchoredLow) <= clusterTolerance
+
+    // Check if session VWAP is also part of the cluster
+    sessionInCluster = false
+    if vwapsInCluster and not na(sessionVwap)
+        clusterCenter = (anchoredHigh + anchoredLow) / 2.0
+        sessionInCluster := math.abs(sessionVwap - clusterCenter) <= clusterTolerance
+
+    // Check if price is near the cluster
+    priceInCluster = false
+    if vwapsInCluster
+        clusterCenter = (anchoredHigh + anchoredLow) / 2.0
+        priceInCluster := math.abs(close - clusterCenter) <= clusterTolerance
+    // Session VWAP alignment is reported (sessionInCluster) but does not gate the cluster
+    clusterActive = vwapsInCluster and priceInCluster and not na(sessionVwap)
+
+    [clusterActive, vwapsInCluster, priceInCluster, sessionInCluster, clusterTolerance]
+
+// === MARKER THROTTLING ===
+canShowSignal(VwapAnchors anchors, VwapConfig config, string signalType) =>
+    if not config.enableThrottling
+        true
+    else
+        switch signalType
+            "PRICE_CROSS" => na(anchors.lastPriceCrossBar) or bar_index - anchors.lastPriceCrossBar >= config.minBarsBetweenSignals
+            "STRUCTURE_CROSS" => na(anchors.lastStructureCrossBar) or bar_index - anchors.lastStructureCrossBar >= config.minBarsBetweenSignals
+            "CLUSTER" => na(anchors.lastClusterBar) or bar_index - anchors.lastClusterBar >= config.minBarsBetweenSignals
+            => true
+
+updateSignalThrottle(VwapAnchors anchors, string signalType) =>
+    switch signalType
+        "PRICE_CROSS" => anchors.lastPriceCrossBar := bar_index
+        "STRUCTURE_CROSS" => anchors.lastStructureCrossBar := bar_index
+        "CLUSTER" => anchors.lastClusterBar := bar_index
+    anchors
+// === POSITION VS SESSION VWAP ===
+analyzeVwapTrend(float sessionVwap) =>
+    pricePosition = close > sessionVwap ? 1 : close < sessionVwap ? -1 : 0
+    distance = math.abs(close - sessionVwap)
+    distancePercent = sessionVwap > 0 ? (distance / sessionVwap) * 100.0 : 0.0
+
+    [pricePosition, distance, distancePercent]
+// === MAIN VWAP PROCESSING FUNCTION ===
+
+processVwapDetection(VwapAnchors anchors, VwapConfig config, float vol, bool sessionReset) =>
+    // Update anchors first
+    updatedAnchors = updateVwapAnchors(anchors, config, vol)
+
+    // Calculate VWAPs — session VWAP is nulled outright when volume isn't real
+    // (na(vol) == not volumeIsReal); ta.vwap() has no external volume input, so
+    // this is the only way to keep it from computing on tick-count volume.
+    // ta.vwap() itself runs every bar for a consistent history.
+    rawSessionVwap = calcSessionVwap(sessionReset)
+    sessionVwap = na(vol) ? na : rawSessionVwap
+    sessionVwapPrev = getPreviousSessionVwap(sessionVwap)
+    // Anchored VWAPs follow the same rule: na while the bar has no real volume
+    // (always on symbols without real volume, whose sums stay 0).
+    anchoredHigh = na(vol) ? na : calcAnchoredVwap(updatedAnchors, true)
+    anchoredLow = na(vol) ? na : calcAnchoredVwap(updatedAnchors, false)
+
+    // Detect crosses (session-reset jumps excluded)
+    [priceCrossUp, priceCrossDown] = detectPriceCrosses(sessionVwap, sessionReset)
+    bool highReanchor = not na(ta.pivothigh(high, config.pivotLeftBars, config.pivotRightBars))
+    bool lowReanchor = not na(ta.pivotlow(low, config.pivotLeftBars, config.pivotRightBars))
+    [structureCrossUp, structureCrossDown] = detectStructureCrosses(sessionVwap, anchoredHigh, anchoredLow, sessionReset, highReanchor, lowReanchor)
+
+    // Detect clusters
+    [clusterActive, vwapsInCluster, priceInCluster, sessionInCluster, clusterTolerance] = detectVwapCluster(sessionVwap, anchoredHigh, anchoredLow, config)
+
+    // Check throttling
+    canShowPriceCross = canShowSignal(updatedAnchors, config, "PRICE_CROSS")
+    canShowStructureCross = canShowSignal(updatedAnchors, config, "STRUCTURE_CROSS")
+    canShowClusterSignal = canShowSignal(updatedAnchors, config, "CLUSTER")
+
+    // Position relative to the session VWAP
+    [pricePosition, distance, distancePercent] = analyzeVwapTrend(sessionVwap)
+
+    // Update throttle states if markers are shown
+    if (priceCrossUp or priceCrossDown) and canShowPriceCross
+        updatedAnchors := updateSignalThrottle(updatedAnchors, "PRICE_CROSS")
+
+    if (structureCrossUp or structureCrossDown) and canShowStructureCross
+        updatedAnchors := updateSignalThrottle(updatedAnchors, "STRUCTURE_CROSS")
+
+    if clusterActive and canShowClusterSignal
+        updatedAnchors := updateSignalThrottle(updatedAnchors, "CLUSTER")
+
+    // Create state object
+    state = VwapState.new(sessionVwap, sessionVwapPrev, anchoredHigh, anchoredLow, updatedAnchors.hasHighAnchor, updatedAnchors.hasLowAnchor, priceCrossUp, priceCrossDown, canShowPriceCross, structureCrossUp, structureCrossDown, canShowStructureCross, clusterActive, canShowClusterSignal, clusterTolerance, vwapsInCluster, priceInCluster, pricePosition, distance, distancePercent)
+
+    [state, updatedAnchors]
+
+// ============================================================================
+// RTA CORE - Zone Management Engine
+// ============================================================================
+// Zone layer: current-TF and HTF zones, display ranking, bands around VWAP
+//
+// Features:
+// - Multi-timeframe zone isolation (HTF vs Current TF)
+// - Zone ranking for display trimming and highlighting
+// - ATR/σ bands around the session VWAP
+// - Zone touch/violation tracking
+// - FVG overlap detection
+// - Performance-optimized zone limits
+//
+// Author: RedefiningTechnicalAnalysis
+// Version: 1.0
+// ============================================================================
+
+// === ZONE MANAGEMENT DATA TYPES ===
+
+type ZoneConfig
+    // Multi-timeframe settings
+    string htfTimeframe
+    bool useHTF
+
+    // Zone limits
+    int maxZonesPerSide
+
+    // Ranking criteria
+    bool rankFavorHTF
+    bool rankFavorFVG
+    bool rankFavorFresh
+
+    // Visual settings
+    bool showOnlyTopRank
+    int alphaTop
+    int alphaRest
+
+    // Band settings
+    string bandBasis  // "ATR", "SIGMA"
+    float bandMultiplier
+
+type Zone
+    float top
+    float bottom
+    float mid
+    int bornTime
+    bool isBull
+    bool isHTF
+    bool touched
+    bool violated
+    bool hasFVG
+    float score
+    int rank
+    box zoneBox
+    line midLine
+    bool isActive
+
+type ZoneState
+    // Zone collections
+    array<Zone> zonesTF
+    array<Zone> zonesHTF
+
+    // Bands around the session VWAP
+    int bandPosition  // 1 = close above upper band, -1 = below lower band, 0 = inside
+    float bandUpper
+    float bandLower
+
+    // Zone statistics
+    int activeBullZones
+    int activeBearZones
+    int totalZones
+
+// === CONFIGURATION HELPERS ===
+
+newZoneConfig() =>
+    ZoneConfig.new("60", true, 5, true, true, true, true, 80, 92, "ATR", 1.5)
+
+newZoneState() =>
+    ZoneState.new(array.new<Zone>(), array.new<Zone>(), 0, na, na, 0, 0, 0)
+
+// === VWAP BANDS ===
+
+calculateBands(ZoneConfig config, bool sessionReset) =>
+    vwap = ta.vwap(close, sessionReset)
+    // Use hardcoded defaults due to Pine Script simple int requirement
+    dev = ta.stdev(close - vwap, 50)
+    atr = ta.atr(14)
+
+    bandWidth = config.bandBasis == "SIGMA" ? dev * config.bandMultiplier : atr * config.bandMultiplier
+    bandUpper = vwap + bandWidth
+    bandLower = vwap - bandWidth
+
+    bandPosition = close > bandUpper ? 1 : close < bandLower ? -1 : 0
+
+    [bandPosition, bandUpper, bandLower]
+
+// === ZONE CREATION ===
+
+createZone(float top, float bottom, bool isBull, bool isHTF) =>
+    mid = (top + bottom) * 0.5
+
+    // Create visual elements
+    zoneColor = isBull ? color.new(color.lime, 85) : color.new(color.red, 85)
+    borderColor = isBull ? color.new(color.green, 0) : color.new(color.maroon, 0)
+
+    // box.new signature requires explicit parameters
+    zoneBox = box.new(left=bar_index, top=top, right=bar_index + 1, bottom=bottom, border_color=borderColor, bgcolor=zoneColor)
+
+    Zone.new(top, bottom, mid, time, isBull, isHTF, false, false, false, 0.0, 0, zoneBox, na, true)
+
+// === ZONE UPDATES ===
+
+updateZoneStatus(Zone zone) =>
+    // Update box position
+    box.set_right(zone.zoneBox, bar_index + 1)
+
+    // Check for touch — only from the bar after creation: zones built from
+    // windows that include the creation bar contain its close by construction
+    if not zone.touched and time > zone.bornTime and close >= zone.bottom and close <= zone.top
+        zone.touched := true
+
+    // Check for violation
+    if not zone.violated
+        if zone.isBull and close < zone.bottom
+            zone.violated := true
+        else if not zone.isBull and close > zone.top
+            zone.violated := true
+
+    // Update visual style based on status
+    baseColor = zone.isBull ? color.green : color.maroon
+    fillAlpha = zone.violated ? 95 : zone.touched ? 88 : 92
+
+    box.set_bgcolor(zone.zoneBox, color.new(baseColor, fillAlpha))
+    box.set_border_color(zone.zoneBox, color.new(baseColor, 0))
+
+    zone
+// === FVG OVERLAP DETECTION ===
+
+// fvgBull / fvgBear come from the one global FVG definition (see core)
+detectFVGOverlap(Zone zone, bool fvgBull, bool fvgBear) =>
+    if zone.isBull and fvgBull
+        zone.hasFVG := true
+    else if not zone.isBull and fvgBear
+        zone.hasFVG := true
+
+    zone
+
+// === ZONE SCORING ===
+
+scoreZone(Zone zone, ZoneConfig config) =>
+    score = 0.0
+
+    // HTF bonus
+    if config.rankFavorHTF and zone.isHTF
+        score += 2.0
+
+    // FVG overlap bonus
+    if config.rankFavorFVG and zone.hasFVG
+        score += 1.0
+
+    // Freshness bonus
+    if config.rankFavorFresh
+        age = (time - zone.bornTime) / 60000  // minutes
+        score += age < 60 ? 1.0 : 0.0
+
+    // Distance to price (prefer closer zones)
+    distToTop = math.abs(close - zone.top)
+    distToBottom = math.abs(close - zone.bottom)
+    minDist = math.min(distToTop, distToBottom)
+    score += minDist == 0 ? 2.0 : 1.0 / (minDist + 0.001)
+
+    // Touch bonus (active zones are more relevant)
+    if zone.touched and not zone.violated
+        score += 1.5
+
+    zone.score := score
+    zone
+
+// === ZONE RANKING AND TRIMMING ===
+
+sortAndTrimZones(array<Zone> zones, ZoneConfig config) =>
+    size = array.size(zones)
+    // Guarded: Pine for-loops run DESCENDING when "0 to -1", so empty arrays
+    // would cause out-of-bounds errors without the size checks
+    if size > 1
+        // Simple selection sort by score (descending).
+        // Outer loop stops at size-2: at i=size-1 the inner range "i+1 to size-1"
+        // becomes "size to size-1", which Pine runs DESCENDING starting at j=size
+        // → array.get(zones, size) is out of bounds. The last element is already
+        // in place after the preceding passes.
+        for i = 0 to size - 2
+            maxIdx = i
+            maxScore = array.get(zones, i).score
+
+            for j = i + 1 to size - 1
+                currentScore = array.get(zones, j).score
+                if currentScore > maxScore
+                    maxIdx := j
+                    maxScore := currentScore
+
+            if maxIdx != i
+                temp = array.get(zones, i)
+                array.set(zones, i, array.get(zones, maxIdx))
+                array.set(zones, maxIdx, temp)
+
+    if size > 0
+        // Separate bull and bear zones
+        bullZones = array.new<Zone>()
+        bearZones = array.new<Zone>()
+
+        for i = 0 to array.size(zones) - 1
+            zone = array.get(zones, i)
+            if zone.isBull
+                array.push(bullZones, zone)
+            else
+                array.push(bearZones, zone)
+
+        // Trim excess zones
+        while array.size(bullZones) > config.maxZonesPerSide
+            excessZone = array.pop(bullZones)
+            box.delete(excessZone.zoneBox)
+            if not na(excessZone.midLine)
+                line.delete(excessZone.midLine)
+
+        while array.size(bearZones) > config.maxZonesPerSide
+            excessZone = array.pop(bearZones)
+            box.delete(excessZone.zoneBox)
+            if not na(excessZone.midLine)
+                line.delete(excessZone.midLine)
+
+        // Rebuild main array with trimmed zones
+        array.clear(zones)
+        if array.size(bullZones) > 0
+            for i = 0 to array.size(bullZones) - 1
+                array.push(zones, array.get(bullZones, i))
+        if array.size(bearZones) > 0
+            for i = 0 to array.size(bearZones) - 1
+                array.push(zones, array.get(bearZones, i))
+
+// === VISUAL ALPHA ADJUSTMENT ===
+
+adjustZoneVisibility(array<Zone> zones, ZoneConfig config) =>
+    // Guarded: empty array would make the loop run 0 → -1 (runtime error);
+    // "true" alone is no early exit in Pine
+    if config.showOnlyTopRank and array.size(zones) > 0
+        for i = 0 to array.size(zones) - 1
+            zone = array.get(zones, i)
+            alpha = i == 0 ? config.alphaTop : config.alphaRest
+            baseColor = zone.isBull ? color.green : color.maroon
+
+            box.set_bgcolor(zone.zoneBox, color.new(baseColor, alpha))
+// === MAIN ZONE PROCESSING ===
+
+processZoneManagement(ZoneState state, ZoneConfig config, bool sessionReset, bool fvgBull, bool fvgBear) =>
+    // Bands around the session VWAP
+    [bandPosition, bandUpper, bandLower] = calculateBands(config, sessionReset)
+
+    state.bandPosition := bandPosition
+    state.bandUpper := bandUpper
+    state.bandLower := bandLower
+
+    // Update existing zones (guarded — empty arrays would loop 0 → -1)
+    if array.size(state.zonesTF) > 0
+        for i = 0 to array.size(state.zonesTF) - 1
+            zone = array.get(state.zonesTF, i)
+            zone := updateZoneStatus(zone)
+            zone := detectFVGOverlap(zone, fvgBull, fvgBear)
+            zone := scoreZone(zone, config)
+            array.set(state.zonesTF, i, zone)
+
+    if array.size(state.zonesHTF) > 0
+        for i = 0 to array.size(state.zonesHTF) - 1
+            zone = array.get(state.zonesHTF, i)
+            zone := updateZoneStatus(zone)
+            zone := detectFVGOverlap(zone, fvgBull, fvgBear)
+            zone := scoreZone(zone, config)
+            array.set(state.zonesHTF, i, zone)
+
+    // Sort and trim zones
+    sortAndTrimZones(state.zonesTF, config)
+    sortAndTrimZones(state.zonesHTF, config)
+
+    // Adjust visibility
+    adjustZoneVisibility(state.zonesTF, config)
+    adjustZoneVisibility(state.zonesHTF, config)
+
+    // Zone counts
+    state.totalZones := array.size(state.zonesTF) + array.size(state.zonesHTF)
+    state.activeBullZones := 0
+    state.activeBearZones := 0
+
+    allZones = array.copy(state.zonesTF)
+    if array.size(state.zonesHTF) > 0
+        for i = 0 to array.size(state.zonesHTF) - 1
+            array.push(allZones, array.get(state.zonesHTF, i))
+
+    if array.size(allZones) > 0
+        for i = 0 to array.size(allZones) - 1
+            zone = array.get(allZones, i)
+            if zone.isActive
+                if zone.isBull
+                    state.activeBullZones += 1
+                else
+                    state.activeBearZones += 1
+
+    state
+
+// ============================================================================
+// RTA CORE - Volume Profile Engine
+// ============================================================================
+
+// Volume Profile: POC and Value Area
+//
+// Features:
+// - Multiple profile modes (Fixed, Rolling, Sessions)
+// - Point of Control (POC) and Value Area (VA) detection
+//
+// Author: RedefiningTechnicalAnalysis
+// Version: 1.0
+// ============================================================================
+
+// === VOLUME PROFILE DATA TYPES ===
+
+type VolumeConfig
+    // Profile settings
+    string profileMode         // "FIXED", "ROLLING", "SESSIONS"
+    int fixedLength
+    int rollingLength
+    string sessionString
+    int binCount
+    float valueAreaPercent
+    bool useHLC3
+
+type VolumeProfile
+    // Core metrics
+    float pocPrice
+    float pocVolume
+    float valueAreaHigh
+    float valueAreaLow
+    float totalVolume
+
+    // Window info
+    int windowStart
+    int windowLength
+    float windowHigh
+    float windowLow
+
+    // Bins
+    array<float> binVolumes
+    array<float> binPrices
+
+type VolumeState
+    VolumeProfile currentProfile
+
+// === CONFIGURATION HELPERS ===
+
+newVolumeConfig() =>
+    VolumeConfig.new("ROLLING", 500, 250, "0930-1600", 64, 0.70, true)
+
+newVolumeState() =>
+    VolumeState.new(VolumeProfile.new(na, na, na, na, na, na, na, na, na, array.new<float>(), array.new<float>()))
+
+// === UTILITY FUNCTIONS ===
+
+getPriceSource(VolumeConfig config) =>
+    config.useHLC3 ? (high + low + close) / 3.0 : close
+
+isInSession(VolumeConfig config) =>
+    not na(time(timeframe.period, config.sessionString))
+
+isNewSession(VolumeConfig config) =>
+    ta.change(isInSession(config)) and isInSession(config)
+
+// === WINDOW CALCULATION ===
+
+calculateWindow(VolumeConfig config) =>
+    var int windowStart = na
+
+    if barstate.isfirst
+        windowStart := bar_index
+
+    switch config.profileMode
+        "FIXED" =>
+            windowStart := bar_index - config.fixedLength
+        "ROLLING" =>
+            windowStart := bar_index - config.rollingLength
+        "SESSIONS" =>
+            if isNewSession(config)
+                windowStart := bar_index
+
+    windowStart := math.max(windowStart, 0)
+    windowLength = bar_index - windowStart + 1
+
+    [windowStart, windowLength]
+
+// === VOLUME PROFILE CALCULATION ===
+
+calculateProfile(VolumeConfig config, int windowStart, int windowLength) =>
+    // Get price source and window boundaries
+    // windowStart defines the bar where the window begins (used for reference)
+    priceSource = getPriceSource(config)
+    // Calculate window boundaries using the window length
+    effectiveLength = math.min(windowLength, bar_index - windowStart + 1)
+    windowHigh = ta.highest(high, effectiveLength)
+    windowLow = ta.lowest(low, effectiveLength)
+
+    // Setup bins
+    minTick = syminfo.mintick
+    span = math.max(windowHigh - windowLow, minTick * config.binCount * 1.0)
+    binSize = math.max(span / config.binCount, minTick)
+
+    // Initialize bin arrays
+    binVolumes = array.new<float>()
+    binPrices = array.new<float>()
+
+    for i = 0 to config.binCount - 1
+        array.push(binVolumes, 0.0)
+        binLow = windowLow + i * binSize
+        binHigh = binLow + binSize
+        array.push(binPrices, (binLow + binHigh) / 2.0)
+
+    // Accumulate volume (performance capped)
+    maxBars = math.min(effectiveLength, 4000)
+    for k = 0 to maxBars - 1
+        px = priceSource[k]
+        binIndex = int(math.floor((px - windowLow) / binSize))
+        binIndex := math.max(0, math.min(binIndex, config.binCount - 1))
+        currentVol = array.get(binVolumes, binIndex)
+        array.set(binVolumes, binIndex, currentVol + volume[k])
+
+    // Calculate POC
+    pocIndex = 0
+    pocVolume = array.get(binVolumes, 0)
+
+    for i = 1 to config.binCount - 1
+        vol = array.get(binVolumes, i)
+        if vol > pocVolume
+            pocVolume := vol
+            pocIndex := i
+
+    pocPrice = array.get(binPrices, pocIndex)
+
+    // Calculate total volume
+    totalVolume = 0.0
+    for i = 0 to config.binCount - 1
+        totalVolume += array.get(binVolumes, i)
+
+    // Calculate Value Area
+    targetVolume = totalVolume * config.valueAreaPercent
+
+    // Sort bins by volume (descending)
+    indexArray = array.new<int>()
+    for i = 0 to config.binCount - 1
+        array.push(indexArray, i)
+
+    // Simple bubble sort by volume
+    for i = 0 to config.binCount - 2
+        for j = 0 to config.binCount - 2 - i
+            idx1 = array.get(indexArray, j)
+            idx2 = array.get(indexArray, j + 1)
+            vol1 = array.get(binVolumes, idx1)
+            vol2 = array.get(binVolumes, idx2)
+            if vol1 < vol2
+                array.set(indexArray, j, idx2)
+                array.set(indexArray, j + 1, idx1)
+
+    // Find Value Area boundaries
+    float accumulatedVolume = 0.0
+    float valueAreaLow = na
+    float valueAreaHigh = na
+
+    for i = 0 to config.binCount - 1
+        binIdx = array.get(indexArray, i)
+        accumulatedVolume += array.get(binVolumes, binIdx)
+        binPrice = array.get(binPrices, binIdx)
+
+        valueAreaLow := na(valueAreaLow) ? binPrice : math.min(valueAreaLow, binPrice)
+        valueAreaHigh := na(valueAreaHigh) ? binPrice : math.max(valueAreaHigh, binPrice)
+
+        if accumulatedVolume >= targetVolume
+            break
+
+    [pocPrice, pocVolume, valueAreaHigh, valueAreaLow, totalVolume,
+     windowHigh, windowLow, binVolumes, binPrices]
+// === MAIN VOLUME PROCESSING ===
+
+processVolumeProfile(VolumeState state, VolumeConfig config) =>
+    // Calculate window
+    [windowStart, windowLength] = calculateWindow(config)
+
+    // Calculate profile
+    [pocPrice, pocVolume, valueAreaHigh, valueAreaLow, totalVolume,
+     windowHigh, windowLow, binVolumes, binPrices] = calculateProfile(config, windowStart, windowLength)
+
+    // Update current profile
+    state.currentProfile.pocPrice := pocPrice
+    state.currentProfile.pocVolume := pocVolume
+    state.currentProfile.valueAreaHigh := valueAreaHigh
+    state.currentProfile.valueAreaLow := valueAreaLow
+    state.currentProfile.totalVolume := totalVolume
+    state.currentProfile.windowStart := windowStart
+    state.currentProfile.windowLength := windowLength
+    state.currentProfile.windowHigh := windowHigh
+    state.currentProfile.windowLow := windowLow
+    state.currentProfile.binVolumes := binVolumes
+    state.currentProfile.binPrices := binPrices
+
+    state
+
+// ============================================================================
+// RTA CORE - HTF Slope Panel Engine
+// ============================================================================
+// Multi-timeframe EMA slope panel: per higher timeframe the EMA(50) change over
+// the last 5 closed HTF bars, in percent. Raw values, no aggregate score.
+//
+// Author: RedefiningTechnicalAnalysis
+// Version: 1.0
+// ============================================================================
+
+// === HTF PANEL DATA TYPES ===
+
+type HTFConfig
+    string[] timeframes         // ["15", "60", "240", "D"] - analyzed timeframes
+    bool autoSelectTFs          // Automatically select TFs based on chart TF
+    int maxTimeframes           // Maximum number of TFs to analyze
+    int choppinessLength        // Choppiness index calculation period
+    bool showStackPanel         // Display the HTF slope panel
+    string panelPosition        // "top_right", "top_left", "bottom_right", "bottom_left"
+    int panelRows               // Number of data rows in the panel
+
+type HTFTrendData
+    string timeframe            // Timeframe identifier
+    float slopePct              // EMA(50) change over 5 HTF bars, in %
+    int direction               // 1 / -1 when |slope| exceeds the dead band, else 0
+    bool isValid                // Data validity flag
+
+type HTFStackState
+    array<HTFTrendData> tfData
+    float choppiness            // Choppiness index of the chart timeframe (0-100)
+    table stackTable            // Panel table
+
+// === CONFIGURATION HELPERS ===
+
+newHTFConfig() =>
+    HTFConfig.new(array.from<string>("15", "60", "240", "D"), true, 4, 14, true, "top_right", 5)
+
+newHTFStackState() =>
+    HTFStackState.new(array.new<HTFTrendData>(), 50.0, na)
+
+// === UTILITY FUNCTIONS ===
+
+getOptimalTimeframes(string chartTF) =>
+    // Automatically select optimal timeframes based on current chart TF
+    chartSeconds = timeframe.in_seconds(chartTF)
+
+    if chartSeconds <= 300  // <= 5min charts
+        array.from<string>("5", "15", "60", "240")
+    else if chartSeconds <= 900  // <= 15min charts
+        array.from<string>("15", "60", "240", "D")
+    else if chartSeconds <= 3600  // <= 1H charts
+        array.from<string>("60", "240", "D", "W")
+    else if chartSeconds <= 14400  // <= 4H charts
+        array.from<string>("240", "D", "W", "M")
+    else  // Daily and higher
+        array.from<string>("D", "W", "M", "3M")
+
+calculateChoppiness(int length) =>
+    // Choppiness Index calculation
+    tr = ta.tr
+    atrSum = math.sum(tr, length)
+    highestHigh = ta.highest(high, length)
+    lowestLow = ta.lowest(low, length)
+
+    if highestHigh - lowestLow == 0
+        50.0  // Default neutral value
+    else
+        chop = 100.0 * math.log10(atrSum / (highestHigh - lowestLow)) / math.log10(length)
+        math.max(0.0, math.min(100.0, chop))
+// === EMA SLOPE ===
+
+// EMA change over 5 bars in %, taken from the last CLOSED bar ([1]) so the HTF
+// request with lookahead_on does not repaint.
+emaSlopePctPrev(int length) =>
+    ema = ta.ema(close, length)
+    slope = (ema - ema[5]) / ema[5] * 100
+    slope[1]
+
+analyzeTrendForTF(string tf) =>
+    // Dead band for the direction arrow: |slope| must exceed 1 %
+    float deadBand = 1.0
+    float slopePct = request.security(syminfo.tickerid, tf, emaSlopePctPrev(50), lookahead=barmerge.lookahead_on)
+    int direction = 0
+    if not na(slopePct)
+        direction := slopePct > deadBand ? 1 : slopePct < -deadBand ? -1 : 0
+    HTFTrendData.new(tf, slopePct, direction, not na(slopePct))
+
+// === VISUAL PANEL CREATION ===
+
+createStackPanel(HTFStackState state, HTFConfig config) =>
+    table stackTable = na
+    if config.showStackPanel
+        // Delete existing table if it exists
+        if not na(state.stackTable)
+            table.delete(state.stackTable)
+
+        pos = switch config.panelPosition
+            "top_left"    => position.top_left
+            "top_right"   => position.top_right
+            "bottom_left" => position.bottom_left
+            =>               position.bottom_right
+
+        stackTable := table.new(pos, 3, config.panelRows + 1,
+                              bgcolor=color.new(color.white, 5),
+                              border_color=color.new(color.gray, 60),
+                              border_width=1,
+                              frame_color=color.new(color.gray, 40),
+                              frame_width=1)
+
+        color tcStack = color.new(color.gray, 20)
+        color hdStack = color.new(color.gray, 90)
+
+        // Header row
+        table.cell(stackTable, 0, 0, "HTF",
+                  bgcolor=hdStack, text_color=tcStack, text_size=size.small)
+        table.cell(stackTable, 1, 0, "EMA50",
+                  bgcolor=hdStack, text_color=tcStack, text_size=size.small)
+        table.cell(stackTable, 2, 0, "Slope %",
+                  bgcolor=hdStack, text_color=tcStack, text_size=size.small)
+
+        // Data rows
+        if array.size(state.tfData) > 0
+            for i = 0 to array.size(state.tfData) - 1
+                if i < config.panelRows
+                    data = array.get(state.tfData, i)
+                    row = i + 1
+
+                    table.cell(stackTable, 0, row, data.timeframe,
+                              text_color=tcStack, text_size=size.small)
+
+                    string dirSymbol = data.direction == 1 ? "↑" : data.direction == -1 ? "↓" : "→"
+                    color dirBg = data.direction == 1 ? #00c853 : data.direction == -1 ? #d50000 : color.new(color.gray, 80)
+                    color dirTx = data.direction != 0 ? color.white : tcStack
+                    table.cell(stackTable, 1, row, dirSymbol,
+                              bgcolor=dirBg, text_color=dirTx, text_size=size.small)
+
+                    string slopeText = data.isValid ? str.tostring(data.slopePct, data.slopePct >= 0 ? "+#.##" : "#.##") : "—"
+                    table.cell(stackTable, 2, row, slopeText,
+                              text_color=tcStack, text_size=size.small)
+
+    stackTable
+
+// === MAIN HTF PANEL PROCESSING ===
+
+processHTFStack(HTFStackState state, HTFConfig config) =>
+    // Auto-select timeframes if enabled
+    timeframes = config.autoSelectTFs ? getOptimalTimeframes(timeframe.period) : config.timeframes
+
+    // Clear existing TF data
+    array.clear(state.tfData)
+
+    // Analyze each timeframe
+    for i = 0 to array.size(timeframes) - 1
+        if i < config.maxTimeframes
+            array.push(state.tfData, analyzeTrendForTF(array.get(timeframes, i)))
+
+    // Choppiness of the chart timeframe
+    state.choppiness := calculateChoppiness(config.choppinessLength)
+
+    // Create visual panel — only on the last bar
+    if barstate.islast
+        state.stackTable := createStackPanel(state, config)
+
+    state
+
+
+// ============================================================================
+// MODULE: inputs
+// ============================================================================
+
+// INPUT SYSTEM
+// ============================================================================
+
+// Display Mode Settings
+groupDisplay = "📊 Display Mode"
+vwapMode = input.string("Smart", "Display Mode", options=["Smart", "Price Only", "Cluster Only"], group=groupDisplay, tooltip="Smart: price crosses, structure crosses and clusters\nPrice Only: Price×VWAP crosses only\nCluster Only: VWAP clusters only")
+
+// VWAP Detection Settings
+groupVwap = "🎯 VWAP Detection"
+clusterPct = input.float(0.3, "Cluster Tolerance (% of Price)", step=0.05, minval=0.1, maxval=2.0, group=groupVwap, tooltip="Maximum distance between VWAPs to consider them clustered")
+
+vwapPivotL = input.int(5, "VWAP Pivot Left", minval=1, maxval=20, group=groupVwap, tooltip="Left bars for pivot detection")
+
+vwapPivotR = input.int(5, "VWAP Pivot Right", minval=1, maxval=20, group=groupVwap, tooltip="Right bars for pivot detection")
+
+minBarsLabel = input.int(50, "Min Bars Between Markers", minval=10, maxval=200, group=groupVwap, tooltip="Minimum distance between two chart markers of the same type (price cross, structure cross, cluster). Visual only — alerts fire on every confirmed cross.")
+
+// Visual Settings
+groupVisual = "🎨 Visual Settings"
+showVWAPLines = input.bool(true, "Show VWAP Lines", group=groupVisual, tooltip="Display VWAP lines on chart")
+
+showLegend = input.bool(true, "Show Legend", group=groupVisual, tooltip="Display legend and status table")
+
+// Zone Management Settings
+groupZones = "🏗️ Zone Management (Pro)"
+useZoneManagement = input.bool(false, "Enable Zone Management", group=groupZones, tooltip="Multi-timeframe zone detection plus bands around the session VWAP. Off by default — draws many zone boxes; enable when you want the zone layer.")
+zoneSource = input.string("Orderblock", "Zone Source", options=["Orderblock","Pivots"], group=groupZones)
+
+htfTimeframe = input.timeframe("60", "HTF Timeframe", group=groupZones, tooltip="Higher timeframe for zone detection. Uses the last closed HTF bar; one zone check per new HTF bar.")
+
+maxZonesPerSide = input.int(5, "Max Zones per Side", minval=1, maxval=10, group=groupZones, tooltip="Maximum number of bull/bear zones to track")
+
+rankFavorHTF = input.bool(true, "Rank Favor HTF Zones", group=groupZones)
+rankFavorFVG = input.bool(true, "Rank Favor FVG Overlap", group=groupZones)
+rankFavorFresh = input.bool(true, "Rank Favor Fresh Zones", group=groupZones)
+
+// VWAP Bands (zone layer)
+groupBands = "📊 VWAP Bands"
+bandBasis = input.string("ATR", "Band Width Basis", options=["ATR", "SIGMA"], group=groupBands, tooltip="Band around the session VWAP, drawn with the zone layer: ATR(14) or σ of (close − VWAP) over 50 bars, times the multiplier.")
+bandMult = input.float(1.5, "Band Multiplier", minval=0.5, step=0.1, group=groupBands)
+
+// Volume Profile Settings (Pro)
+groupVolume = "📊 Volume Profile (Pro)"
+useVolumeProfile = input.bool(false, "Enable Volume Profile", group=groupVolume, tooltip="POC and Value Area of a volume profile. Off by default.")
+
+volumeProfileMode = input.string("ROLLING", "Profile Mode", options=["FIXED", "ROLLING", "SESSIONS"], group=groupVolume)
+
+rollingLength = input.int(250, "Rolling Length", minval=50, maxval=1000, group=groupVolume)
+binCount = input.int(64, "Bin Count", minval=24, maxval=200, group=groupVolume)
+valueAreaPercent = input.float(0.70, "Value Area %", minval=0.5, maxval=0.99, step=0.01, group=groupVolume)
+
+// HTF Slope Panel Settings (Pro)
+groupHTFStack = "📊 HTF Slope Panel (Pro)"
+useHTFStack = input.bool(false, "Enable HTF Slope Panel", group=groupHTFStack, tooltip="Table with the EMA(50) slope of four higher timeframes (last closed HTF bar, change over 5 HTF bars in %). Off by default.")
+
+htfStackPosition = input.string("top_left", "Panel Position", options=["top_left", "top_right", "bottom_left", "bottom_right"], group=groupHTFStack)
+
+showChoppiness = input.bool(true, "Show Choppiness Index", group=groupHTFStack, tooltip="Show the Choppiness Index (14) of the chart timeframe in the legend")
+
+// ============================================================================
+// DATA VALIDITY GUARD — VWAP is fundamentally volume-weighted. Tick volume or a
+// feed without volume carries no economic weighting, so the whole
+// VWAP/zone/volume-profile stack is gated off rather than computed on fake data.
+// ============================================================================
+
+// Echtes Handelsvolumen? Nur "tick" schließt aus; "n/a" zählt, wenn der Feed Volumen liefert (DATA_VALIDITY §2).
+bool volumeIsReal = (ta.cum(nz(volume)) > 0 and syminfo.volumetype != "tick") and not na(volume)
+float vol = volumeIsReal ? volume : na
+
+// ============================================================================
+
+
+// ============================================================================
+// MODULE: core
+// ============================================================================
+
+// WUC VWAP DETECTION SETUP (Replaces all modules)
+// ============================================================================
+
+// Create WUC VWAP Configuration
+vwapConfig = newVwapConfig()
+vwapConfig.pivotLeftBars := vwapPivotL
+vwapConfig.pivotRightBars := vwapPivotR
+vwapConfig.clusterTolerancePercent := clusterPct
+vwapConfig.minBarsBetweenSignals := minBarsLabel
+vwapConfig.enableThrottling := true
+vwapConfig.detectClusters := true
+
+// Initialize VWAP anchors storage (persistent across bars)
+var vwapAnchors = newVwapAnchors()
+
+// Initialize Zone Management (Pro Feature)
+var zoneState = newZoneState()
+zoneConfig = newZoneConfig()
+
+// Configure Zone Management
+if useZoneManagement
+    zoneConfig.htfTimeframe := htfTimeframe
+    zoneConfig.useHTF := true
+    zoneConfig.maxZonesPerSide := maxZonesPerSide
+    zoneConfig.rankFavorHTF := rankFavorHTF
+    zoneConfig.rankFavorFVG := rankFavorFVG
+    zoneConfig.rankFavorFresh := rankFavorFresh
+    zoneConfig.bandBasis := bandBasis
+    zoneConfig.bandMultiplier := bandMult
+
+// Initialize Volume Profile (Pro Feature)
+var volumeState = newVolumeState()
+volumeConfig = newVolumeConfig()
+
+// Configure Volume Profile
+if useVolumeProfile
+    volumeConfig.profileMode := volumeProfileMode
+    volumeConfig.rollingLength := rollingLength
+    volumeConfig.binCount := binCount
+    volumeConfig.valueAreaPercent := valueAreaPercent
+    volumeConfig.useHLC3 := true
+
+// Initialize HTF Slope Panel (Pro Feature)
+var htfStackState = newHTFStackState()
+htfConfig = newHTFConfig()
+
+// Configure HTF Slope Panel
+if useHTFStack
+    htfConfig.showStackPanel := true
+    htfConfig.panelPosition := htfStackPosition
+    htfConfig.autoSelectTFs := true
+    htfConfig.maxTimeframes := 4
+
+// ============================================================================
+// CORE VWAP PROCESSING
+// ============================================================================
+
+// Session VWAP anchor — one definition for the VWAP and for the cross reset
+bool sessionReset = timeframe.change("D")
+
+[vwapState, updatedAnchors] = processVwapDetection(vwapAnchors, vwapConfig, vol, sessionReset)
+vwapAnchors := updatedAnchors
+
+// ATR(14) for raw distance read-outs and zone widths
+float atr14 = ta.atr(14)
+
+// Raw distance of the close from the session VWAP, in ATR (signed)
+float distAtr = atr14 > 0 ? (close - vwapState.sessionVwap) / atr14 : na
+
+// Pivot-zone inputs evaluated every bar (ta.* must not run in conditional scope)
+float zonePivotHigh = ta.pivothigh(high, vwapPivotL, vwapPivotR)
+float zonePivotLow = ta.pivotlow(low, vwapPivotL, vwapPivotR)
+float zonePivotHighest15 = ta.highest(high, 15)
+float zonePivotHighest8 = ta.highest(high, 8)
+float zonePivotLowest15 = ta.lowest(low, 15)
+float zonePivotLowest8 = ta.lowest(low, 8)
+
+// FVG — one definition for zone creation and the FVG overlap check:
+// bullish gap = low above the high two bars back, bearish gap = high below the low two bars back
+bool fvgBull = low > high[2]
+bool fvgBear = high < low[2]
+
+// Cluster zones are created once, when a cluster forms
+bool clusterActiveNow = vwapState.isClusterActive
+bool clusterStart = clusterActiveNow and not clusterActiveNow[1]
+
+// HTF zone inputs — values of the last CLOSED HTF bar ([1]) with lookahead_on,
+// so nothing repaints. Requested every bar at global scope.
+float htfPivotHigh = request.security(syminfo.tickerid, htfTimeframe, ta.pivothigh(high, vwapPivotL, vwapPivotR)[1], lookahead=barmerge.lookahead_on)
+float htfPivotLow  = request.security(syminfo.tickerid, htfTimeframe, ta.pivotlow(low, vwapPivotL, vwapPivotR)[1], lookahead=barmerge.lookahead_on)
+float htfVwap      = request.security(syminfo.tickerid, htfTimeframe, ta.vwap(close)[1], lookahead=barmerge.lookahead_on)
+float htfAtr       = request.security(syminfo.tickerid, htfTimeframe, ta.atr(14)[1], lookahead=barmerge.lookahead_on)
+float htfHigh12    = request.security(syminfo.tickerid, htfTimeframe, ta.highest(high, 12)[1], lookahead=barmerge.lookahead_on)
+float htfHigh6     = request.security(syminfo.tickerid, htfTimeframe, ta.highest(high, 6)[1], lookahead=barmerge.lookahead_on)
+float htfLow12     = request.security(syminfo.tickerid, htfTimeframe, ta.lowest(low, 12)[1], lookahead=barmerge.lookahead_on)
+float htfLow6      = request.security(syminfo.tickerid, htfTimeframe, ta.lowest(low, 6)[1], lookahead=barmerge.lookahead_on)
+
+// The HTF values stay the same for every chart bar inside one HTF bar. Zones are
+// only created on the first chart bar of a new HTF bar — one zone per HTF pivot.
+bool htfNewBar = timeframe.change(htfTimeframe)
+
+// Process Zone Management (Pro Feature)
+// Gated on volumeIsReal too: the bands and several zone creation paths (cluster,
+// HTF, FVG-VWAP) are anchored to VWAP levels — without real volume the zone
+// layer has nothing valid to anchor to.
+if useZoneManagement and volumeIsReal
+    if barstate.isconfirmed
+        // Method 1: Zone source (Orderblock-like vs Pivot-based)
+        if zoneSource == "Pivots"
+            if vwapState.hasAnchoredHigh and vwapState.hasAnchoredLow
+                // Pivot zones whose outer edge lies within 2 ATR of the session VWAP
+                if not na(zonePivotHigh)
+                    zoneTop = zonePivotHighest15
+                    zoneBottom = zonePivotLowest8
+                    if math.abs(zoneTop - vwapState.sessionVwap) < (atr14 * 2.0)
+                        array.unshift(zoneState.zonesTF, createZone(zoneTop, zoneBottom, false, false))
+
+                if not na(zonePivotLow)
+                    zoneTop = zonePivotHighest8
+                    zoneBottom = zonePivotLowest15
+                    if math.abs(zoneBottom - vwapState.sessionVwap) < (atr14 * 2.0)
+                        array.unshift(zoneState.zonesTF, createZone(zoneTop, zoneBottom, true, false))
+        else
+            // Orderblock-like zones: last opposite candle before impulse
+            impulsUp = close > open and (close - open) > atr14 * 0.5
+            impulsDn = close < open and (open - close) > atr14 * 0.5
+
+            bullOB = impulsUp and close[1] < open[1]
+            bearOB = impulsDn and close[1] > open[1]
+
+            if bullOB
+                array.unshift(zoneState.zonesTF, createZone(open[1], low[1], true, false))
+
+            if bearOB
+                array.unshift(zoneState.zonesTF, createZone(high[1], open[1], false, false))
+
+        // Method 2: VWAP cluster zones — once, when the cluster forms
+        if clusterStart
+            clusterCenter = vwapState.sessionVwap
+            clusterRange = atr14 * 1.5
+
+            // Zone below/around the cluster centre
+            array.unshift(zoneState.zonesTF, createZone(clusterCenter + (clusterRange * 0.3), clusterCenter - (clusterRange * 0.7), true, false))
+
+            // Zone above/around the cluster centre
+            array.unshift(zoneState.zonesTF, createZone(clusterCenter + (clusterRange * 0.7), clusterCenter - (clusterRange * 0.3), false, false))
+
+        // Method 3: HTF zones — pivot edge within 3 HTF ATR of the HTF VWAP,
+        // checked once per new HTF bar
+        if htfNewBar and not na(htfVwap)
+            if not na(htfPivotHigh) and math.abs(htfHigh12 - htfVwap) < (htfAtr * 3.0)
+                array.unshift(zoneState.zonesHTF, createZone(htfHigh12, htfLow6, false, true))
+
+            if not na(htfPivotLow) and math.abs(htfLow12 - htfVwap) < (htfAtr * 3.0)
+                array.unshift(zoneState.zonesHTF, createZone(htfHigh6, htfLow12, true, true))
+
+        // Method 4: FVG zones with the session VWAP inside the gap
+        if fvgBull and vwapState.sessionVwap >= high[2] and vwapState.sessionVwap <= low
+            fvgZone = createZone(low, high[2], true, false)
+            fvgZone.hasFVG := true
+            array.unshift(zoneState.zonesTF, fvgZone)
+
+        if fvgBear and vwapState.sessionVwap >= high and vwapState.sessionVwap <= low[2]
+            fvgZone = createZone(low[2], high, false, false)
+            fvgZone.hasFVG := true
+            array.unshift(zoneState.zonesTF, fvgZone)
+
+    zoneState := processZoneManagement(zoneState, zoneConfig, sessionReset, fvgBull, fvgBear)
+
+// Process Volume Profile (Pro Feature) — literally a histogram of `volume`.
+// Computed on every bar while enabled (its ta.change/ta.highest/ta.lowest keep a
+// consistent history); POC/VAH/VAL plots and the legend row are gated on
+// volumeIsReal, since tick-count volume produces a fabricated profile.
+if useVolumeProfile
+    volumeState := processVolumeProfile(volumeState, volumeConfig)
+
+// Process HTF Slope Panel (Pro Feature)
+if useHTFStack
+    htfStackState := processHTFStack(htfStackState, htfConfig)
+
+// ============================================================================
+// DISPLAY LOGIC
+// ============================================================================
+
+// Check display mode settings
+bool isPriceMode = vwapMode == "Smart" or vwapMode == "Price Only"
+bool isSmartMode = vwapMode == "Smart"
+bool isClusterMode = vwapMode == "Smart" or vwapMode == "Cluster Only"
+
+// Chart markers: throttled events of each type
+bool showPriceCrossUp = isPriceMode and vwapState.priceCrossUp and vwapState.canShowPriceCross
+bool showPriceCrossDown = isPriceMode and vwapState.priceCrossDown and vwapState.canShowPriceCross
+bool showStructureCrossUp = isSmartMode and vwapState.structureCrossUp and vwapState.canShowStructureCross
+bool showStructureCrossDown = isSmartMode and vwapState.structureCrossDown and vwapState.canShowStructureCross
+bool showCluster = isClusterMode and vwapState.isClusterActive and vwapState.canShowCluster
+
+// Colors
+COL_VWAP = color.new(color.blue, 0)
+COL_AVWAP_H = color.new(color.purple, 0)
+COL_AVWAP_L = color.new(color.orange, 0)
+COL_UP = #00c853
+COL_DN = #d50000
+
+// ============================================================================
+
+
+// ============================================================================
+// MODULE: visualization
+// ============================================================================
+
+// VISUAL RENDERING
+// ============================================================================
+
+// Plot VWAP Lines
+plot(showVWAPLines ? vwapState.sessionVwap : na,
+     title="Session VWAP", color=COL_VWAP, linewidth=2)
+
+plot(showVWAPLines and vwapState.hasAnchoredHigh ? vwapState.anchoredVwapHigh : na,
+     title="Anchored VWAP High", color=COL_AVWAP_H, linewidth=1)
+
+plot(showVWAPLines and vwapState.hasAnchoredLow ? vwapState.anchoredVwapLow : na,
+     title="Anchored VWAP Low", color=COL_AVWAP_L, linewidth=1)
+
+// Bands around the session VWAP (zone layer)
+plot(useZoneManagement and volumeIsReal ? zoneState.bandUpper : na, title="Band Upper", color=color.new(color.blue, 60), linewidth=1)
+plot(useZoneManagement and volumeIsReal ? zoneState.bandLower : na, title="Band Lower", color=color.new(color.blue, 60), linewidth=1)
+
+// Plot Volume Profile levels (Pro Feature)
+plot(useVolumeProfile and volumeIsReal ? volumeState.currentProfile.pocPrice : na, title="POC",
+     color=color.new(color.purple, 0), linewidth=3)
+plot(useVolumeProfile and volumeIsReal ? volumeState.currentProfile.valueAreaHigh : na, title="VAH",
+     color=color.new(color.gray, 50), linewidth=1)
+plot(useVolumeProfile and volumeIsReal ? volumeState.currentProfile.valueAreaLow : na, title="VAL",
+     color=color.new(color.gray, 50), linewidth=1)
+
+// MARKER 1: Price × session VWAP cross — drawn as labels so each one carries a
+// hover tooltip with the raw values.
+f_crossLabel(bool _isUp) =>
+    string distTxt = na(distAtr) ? "—" : str.tostring(distAtr, distAtr >= 0 ? "+#.##" : "#.##") + " ATR"
+    string tip = (_isUp ? "Close crossed above session VWAP" : "Close crossed below session VWAP") + "\nClose: " + str.tostring(close, format.mintick) + "\nVWAP: " + str.tostring(vwapState.sessionVwap, format.mintick) + "\nDistance: " + distTxt
+    label.new(bar_index, _isUp ? low : high, _isUp ? "▲" : "▼",
+         xloc=xloc.bar_index, yloc=yloc.price,
+         style=_isUp ? label.style_label_up : label.style_label_down,
+         color=_isUp ? COL_UP : COL_DN,
+         textcolor=color.white, size=size.small, tooltip=tip)
+
+if showPriceCrossUp
+    f_crossLabel(true)
+if showPriceCrossDown
+    f_crossLabel(false)
+
+// MARKER 2: VWAP Structure Cross (session VWAP × anchored VWAP)
+plotshape(showStructureCrossUp,   title="VWAP Structure Up",   style=shape.diamond, location=location.bottom, color=color.new(color.aqua, 0),   size=size.tiny, text="S")
+plotshape(showStructureCrossDown, title="VWAP Structure Down", style=shape.diamond, location=location.top,    color=color.new(color.orange, 0), size=size.tiny, text="S")
+
+// MARKER 3: Multi-VWAP Cluster
+plotshape(showCluster, title="VWAP Cluster", style=shape.circle, location=location.bottom, color=#ffd600, size=size.small, text="C")
+
+// Cluster zone background (subtle)
+bgcolor(vwapState.vwapsInCluster ? color.new(color.yellow, 93) : na,
+       title="VWAP Cluster Zone")
+
+// ============================================================================
+// INFORMATION PANEL
+// ============================================================================
+
+if showLegend and barstate.islast
+    // Sized for the maximum row count (8 + 2 zones + 2 VP + 1 choppiness);
+    // volumeIsReal can flip on the realtime bar
+    var table legend = table.new(position.top_right, 2, 13,
+                                 bgcolor=color.new(color.white, 5),
+                                 border_color=color.new(color.gray, 60),
+                                 border_width=1,
+                                 frame_color=color.new(color.gray, 40),
+                                 frame_width=1)
+
+    color tcLegend = color.new(color.gray, 20)
+    color hdLegend = color.new(color.gray, 90)
+
+    // Header
+    table.cell(legend, 0, 0, "VWAP Cross Visuals",
+               text_color=tcLegend, bgcolor=hdLegend, text_size=size.small)
+    table.cell(legend, 1, 0, "v2.4.1",
+               text_color=tcLegend, bgcolor=hdLegend, text_size=size.small)
+
+    // Marker legend
+    table.cell(legend, 0, 1, "▲/▼",
+               text_color=tcLegend, text_size=size.small)
+    table.cell(legend, 1, 1, "Price × VWAP",
+               text_color=tcLegend, text_size=size.small)
+
+    table.cell(legend, 0, 2, "◆ S",
+               text_color=tcLegend, text_size=size.small)
+    table.cell(legend, 1, 2, "Structure Cross",
+               text_color=tcLegend, text_size=size.small)
+
+    table.cell(legend, 0, 3, "● C",
+               text_color=tcLegend, text_size=size.small)
+    table.cell(legend, 1, 3, "VWAP Cluster",
+               text_color=tcLegend, text_size=size.small)
+
+    // Current mode
+    table.cell(legend, 0, 4, "Mode:",
+               text_color=tcLegend, text_size=size.small)
+    table.cell(legend, 1, 4, vwapMode,
+               text_color=#ff6f00, text_size=size.small)
+
+    // Close vs session VWAP
+    string sideText = na(vwapState.sessionVwap) ? "—" : vwapState.priceVwapPosition == 1 ? "Above" : vwapState.priceVwapPosition == -1 ? "Below" : "At VWAP"
+    table.cell(legend, 0, 5, "Close vs VWAP:",
+               text_color=tcLegend, text_size=size.small)
+    table.cell(legend, 1, 5, sideText,
+               text_color=tcLegend, text_size=size.small)
+
+    // Distance in ATR
+    table.cell(legend, 0, 6, "Distance:",
+               text_color=tcLegend, text_size=size.small)
+    table.cell(legend, 1, 6, na(distAtr) ? "—" : str.tostring(distAtr, distAtr >= 0 ? "+#.##" : "#.##") + " ATR",
+               text_color=tcLegend, text_size=size.small)
+
+    // Cluster state
+    string clusterText = vwapState.isClusterActive ? "Price in cluster" : vwapState.vwapsInCluster ? "VWAPs clustered" : "—"
+    table.cell(legend, 0, 7, "Cluster:",
+               text_color=tcLegend, text_size=size.small)
+    table.cell(legend, 1, 7, clusterText,
+               text_color=tcLegend, text_size=size.small)
+
+    // Row cursor for the optional sections
+    int nextRow = 8
+
+    // Zone layer — gated like the original row count
+    if useZoneManagement and volumeIsReal
+        string bandText = zoneState.bandPosition == 1 ? "Above band" : zoneState.bandPosition == -1 ? "Below band" : "Inside band"
+        table.cell(legend, 0, nextRow, "Band Position:",
+                   text_color=tcLegend, text_size=size.small)
+        table.cell(legend, 1, nextRow, bandText,
+                   text_color=tcLegend, text_size=size.small)
+        nextRow += 1
+
+        table.cell(legend, 0, nextRow, "Zones (bull/bear):",
+                   text_color=tcLegend, text_size=size.small)
+        table.cell(legend, 1, nextRow, str.tostring(zoneState.activeBullZones) + " / " + str.tostring(zoneState.activeBearZones),
+                   text_color=tcLegend, text_size=size.small)
+        nextRow += 1
+
+    // Volume profile — gated like the original row count
+    if useVolumeProfile and volumeIsReal
+        table.cell(legend, 0, nextRow, "POC:",
+                   text_color=tcLegend, text_size=size.small)
+        table.cell(legend, 1, nextRow, str.tostring(volumeState.currentProfile.pocPrice, format.mintick),
+                   text_color=color.purple, text_size=size.small)
+        nextRow += 1
+
+        vaRange = str.tostring(volumeState.currentProfile.valueAreaHigh, format.mintick) + " - " + str.tostring(volumeState.currentProfile.valueAreaLow, format.mintick)
+        table.cell(legend, 0, nextRow, "VA Range:",
+                   text_color=tcLegend, text_size=size.small)
+        table.cell(legend, 1, nextRow, vaRange,
+                   text_color=tcLegend, text_size=size.small)
+        nextRow += 1
+
+    // Choppiness — gated like the original row count
+    if useHTFStack and showChoppiness
+        table.cell(legend, 0, nextRow, "Choppiness (14):",
+                   text_color=tcLegend, text_size=size.small)
+        table.cell(legend, 1, nextRow, str.tostring(htfStackState.choppiness, "#.#"),
+                   text_color=tcLegend, text_size=size.small)
+
+// ============================================================================
+// DATA WINDOW
+// ============================================================================
+plot(distAtr, title="Distance to VWAP (ATR)", display=display.data_window)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+// Event descriptions, confirmed bar only: each cross fires once, on the bar
+// that closes on the new side. Crosses caused by the session VWAP reset are
+// already excluded in the cross detection. The marker throttle is visual only.
+alertcondition(barstate.isconfirmed and vwapState.priceCrossUp,       title="VXV Close Crossed Above VWAP",         message="VXV · close crossed above session VWAP · {{ticker}} {{interval}}")
+alertcondition(barstate.isconfirmed and vwapState.priceCrossDown,     title="VXV Close Crossed Below VWAP",         message="VXV · close crossed below session VWAP · {{ticker}} {{interval}}")
+alertcondition(barstate.isconfirmed and vwapState.structureCrossUp,   title="VXV Session VWAP Crossed Above AVWAP", message="VXV · session VWAP crossed above an anchored VWAP · {{ticker}} {{interval}}")
+alertcondition(barstate.isconfirmed and vwapState.structureCrossDown, title="VXV Session VWAP Crossed Below AVWAP", message="VXV · session VWAP crossed below an anchored VWAP · {{ticker}} {{interval}}")
+
+// ============================================================================
+// DATA VALIDITY WARNING
+// ============================================================================
+// Kurzer Hinweis unten rechts; was fehlt, steht im Data Contract oben.
+var table volWarn = table.new(position.bottom_right, 1, 1)
+if barstate.islast and not volumeIsReal
+    table.cell(volWarn, 0, 0, "VWAP Cross Visuals · not available",
+         bgcolor = color.new(color.orange, 20), text_color = color.white, text_size = size.small)

@@ -1,0 +1,337 @@
+// © https://monetry.in + Enhanced PRO Edition
+//@version=6
+indicator("MahadevLevels35 PRO 🔱", max_lines_count=500, max_labels_count=500, max_boxes_count=50, overlay=true)
+
+// ════════════════════════════════════════════════════════════
+// GROUP 1: LEVEL SETTINGS
+// ════════════════════════════════════════════════════════════
+gLevels = "🎯 MAHADEV LEVELS"
+labeltransparency = input.int(50, "Label Transparency", group=gLevels)
+labelPriceColor   = input.color(color.black, "Label Price Color", group=gLevels)
+maxRange          = input.int(500, "Max Range", group=gLevels)
+
+showLevels03 = input(true, "Level 03 |",  inline="L03", group=gLevels)
+levelColor03 = input.color(color.new(#ffd752, 0), "", inline="L03", group=gLevels)
+thickness03  = input.int(1, "", inline="L03", group=gLevels)
+
+showLevels11 = input(true, "Level 11 |",  inline="L11", group=gLevels)
+levelColor11 = input.color(color.red, "", inline="L11", group=gLevels)
+thickness11  = input.int(1, "", inline="L11", group=gLevels)
+
+showLevels29 = input(true, "Level 29 |",  inline="L29", group=gLevels)
+levelColor29 = input.color(color.new(#52ff52, 0), "", inline="L29", group=gLevels)
+thickness29  = input.int(1, "", inline="L29", group=gLevels)
+
+showLevels35 = input(true, "Level 35 |",  inline="L35", group=gLevels)
+levelColor35 = input.color(color.new(#528fff, 0), "", inline="L35", group=gLevels)
+thickness35  = input.int(1, "", inline="L35", group=gLevels)
+
+showLevels65 = input(true, "Level 65 |",  inline="L65", group=gLevels)
+levelColor65 = input.color(color.new(#ff52da, 0), "", inline="L65", group=gLevels)
+thickness65  = input.int(1, "", inline="L65", group=gLevels)
+
+showLevels71 = input(true, "Level 71 |",  inline="L71", group=gLevels)
+levelColor71 = input.color(color.new(#e5ff52, 0), "", inline="L71", group=gLevels)
+thickness71  = input.int(1, "", inline="L71", group=gLevels)
+
+// ════════════════════════════════════════════════════════════
+// GROUP 2: EMA SETTINGS
+// ════════════════════════════════════════════════════════════
+gEMA = "📈 EMAs"
+showEMA   = input.bool(true, "Show EMAs", group=gEMA)
+emaSource = input.source(close, "EMA Source", group=gEMA)
+
+showEMA9   = input.bool(true,  "EMA 9   |", inline="E9",   group=gEMA)
+colorEMA9  = input.color(color.new(#00bcd4, 0), "", inline="E9", group=gEMA)
+
+showEMA27  = input.bool(true,  "EMA 27  |", inline="E27",  group=gEMA)
+colorEMA27 = input.color(color.new(#4caf50, 0), "", inline="E27", group=gEMA)
+
+showEMA81  = input.bool(true,  "EMA 81  |", inline="E81",  group=gEMA)
+colorEMA81 = input.color(color.new(#ffc107, 0), "", inline="E81", group=gEMA)
+
+showEMA108 = input.bool(true,  "EMA 108 |", inline="E108", group=gEMA)
+colorEMA108= input.color(color.new(#ff9800, 0), "", inline="E108", group=gEMA)
+
+showEMA144 = input.bool(true,  "EMA 144 |", inline="E144", group=gEMA)
+colorEMA144= input.color(color.new(#e91e63, 0), "", inline="E144", group=gEMA)
+
+showEMA216 = input.bool(true,  "EMA 216 |", inline="E216", group=gEMA)
+colorEMA216= input.color(color.new(#9c27b0, 0), "", inline="E216", group=gEMA)
+
+showEMA396 = input.bool(true,  "EMA 396 |", inline="E396", group=gEMA)
+colorEMA396= input.color(color.new(#f44336, 0), "", inline="E396", group=gEMA)
+
+// ════════════════════════════════════════════════════════════
+// GROUP 3: VWAP SETTINGS
+// ════════════════════════════════════════════════════════════
+gVWAP = "📊 VWAP"
+showVWAP      = input.bool(true, "Show VWAP", group=gVWAP)
+showVWAPBands = input.bool(true, "Show VWAP Bands (±1σ, ±2σ)", group=gVWAP)
+colorVWAP     = input.color(color.new(#ffeb3b, 0), "VWAP Color", group=gVWAP)
+colorBand1    = input.color(color.new(#ffeb3b, 70), "Band 1σ", group=gVWAP)
+colorBand2    = input.color(color.new(#ffeb3b, 85), "Band 2σ", group=gVWAP)
+
+// ════════════════════════════════════════════════════════════
+// GROUP 4: VIX FROM LAST EXPIRY
+// ════════════════════════════════════════════════════════════
+gVIX = "⚡ VIX EXPIRY MOVE"
+showVIXLevels = input.bool(true, "Show VIX-implied Range", group=gVIX)
+vixSymbol     = input.symbol("NSE:INDIAVIX",  "VIX Symbol", group=gVIX)
+expiryDay     = input.string("Thursday", "Expiry Day", options=["Tuesday","Wednesday","Thursday","Friday"], group=gVIX)
+vixRangeColor = input.color(color.new(#ff5722, 70), "VIX Range Color", group=gVIX)
+vixLineWidth  = input.int(2, "VIX Line Width", group=gVIX)
+
+// ════════════════════════════════════════════════════════════
+// GROUP 5: TREND DASHBOARD
+// ════════════════════════════════════════════════════════════
+gDash = "🎛️ DASHBOARD"
+showDashboard = input.bool(true, "Show Dashboard", group=gDash)
+dashPos       = input.string("Top Right", "Position", options=["Top Right","Top Left","Bottom Right","Bottom Left","Middle Right"], group=gDash)
+dashSize      = input.string("Normal", "Size", options=["Tiny","Small","Normal","Large"], group=gDash)
+showSignals   = input.bool(true, "Show Buy/Sell Signals on Chart", group=gDash)
+
+// ════════════════════════════════════════════════════════════
+// LEVEL DRAWING (your original logic)
+// ════════════════════════════════════════════════════════════
+containsLevel(price, levelStr) =>
+    priceStr = str.tostring(price)
+    len = str.length(levelStr)
+    rightEnd = str.substring(priceStr, str.length(priceStr) - len, str.length(priceStr))
+    rightEnd == levelStr
+
+var line[]  priceLines  = array.new<line>()
+var label[] priceLabels = array.new<label>()
+var linesplotted = false
+
+drawLevel(price, col, thick) =>
+    ln = line.new(x1=bar_index-1, y1=price, x2=bar_index+10, y2=price, color=col, width=thick, extend=extend.left)
+    array.push(priceLines, ln)
+    la = label.new(x=bar_index+10, y=price, text=str.tostring(price), color=color.new(col, labeltransparency), style=label.style_label_left, textcolor=labelPriceColor, size=size.small)
+    array.push(priceLabels, la)
+
+if barstate.islast and not linesplotted
+    linesplotted := true
+    for offset = -maxRange to maxRange
+        testPrice = math.floor(close) + offset + 0.0
+        if showLevels03 and containsLevel(testPrice, "03")
+            drawLevel(testPrice, levelColor03, thickness03)
+        if showLevels11 and containsLevel(testPrice, "11")
+            drawLevel(testPrice, levelColor11, thickness11)
+        if showLevels29 and containsLevel(testPrice, "29")
+            drawLevel(testPrice, levelColor29, thickness29)
+        if showLevels35 and containsLevel(testPrice, "35")
+            drawLevel(testPrice, levelColor35, thickness35)
+        if showLevels65 and containsLevel(testPrice, "65")
+            drawLevel(testPrice, levelColor65, thickness65)
+        if showLevels71 and containsLevel(testPrice, "71")
+            drawLevel(testPrice, levelColor71, thickness71)
+
+if barstate.islast
+    if array.size(priceLabels) > 0
+        for i = 0 to array.size(priceLabels) - 1
+            label.set_x(array.get(priceLabels, i), bar_index + 10)
+    if array.size(priceLines) > 0
+        for i = 0 to array.size(priceLines) - 1
+            line.set_x2(array.get(priceLines, i), bar_index + 10)
+
+// ════════════════════════════════════════════════════════════
+// EMAs
+// ════════════════════════════════════════════════════════════
+ema9   = ta.ema(emaSource, 9)
+ema27  = ta.ema(emaSource, 27)
+ema81  = ta.ema(emaSource, 81)
+ema108 = ta.ema(emaSource, 108)
+ema144 = ta.ema(emaSource, 144)
+ema216 = ta.ema(emaSource, 216)
+ema396 = ta.ema(emaSource, 396)
+
+plot(showEMA and showEMA9   ? ema9   : na, "EMA 9",   color=colorEMA9,   linewidth=1)
+plot(showEMA and showEMA27  ? ema27  : na, "EMA 27",  color=colorEMA27,  linewidth=1)
+plot(showEMA and showEMA81  ? ema81  : na, "EMA 81",  color=colorEMA81,  linewidth=2)
+plot(showEMA and showEMA108 ? ema108 : na, "EMA 108", color=colorEMA108, linewidth=2)
+plot(showEMA and showEMA144 ? ema144 : na, "EMA 144", color=colorEMA144, linewidth=2)
+plot(showEMA and showEMA216 ? ema216 : na, "EMA 216", color=colorEMA216, linewidth=3)
+plot(showEMA and showEMA396 ? ema396 : na, "EMA 396", color=colorEMA396, linewidth=3)
+
+// ════════════════════════════════════════════════════════════
+// VWAP + Bands (FIXED)
+// ════════════════════════════════════════════════════════════
+sessionStart = ta.change(time("D")) != 0
+[vwapVal, vwapUpper1, vwapLower1] = ta.vwap(hlc3, sessionStart, 1.0)
+[_, vwapUpper2, vwapLower2]       = ta.vwap(hlc3, sessionStart, 2.0)
+
+plot(showVWAP ? vwapVal : na, "VWAP", color=colorVWAP, linewidth=2)
+plot(showVWAP and showVWAPBands ? vwapUpper1 : na, "VWAP +1σ", color=colorBand1)
+plot(showVWAP and showVWAPBands ? vwapLower1 : na, "VWAP -1σ", color=colorBand1)
+plot(showVWAP and showVWAPBands ? vwapUpper2 : na, "VWAP +2σ", color=colorBand2)
+plot(showVWAP and showVWAPBands ? vwapLower2 : na, "VWAP -2σ", color=colorBand2)
+
+// ════════════════════════════════════════════════════════════
+// VIX-based Expected Range
+// ════════════════════════════════════════════════════════════
+vixClose = request.security(vixSymbol, "D", close, lookahead=barmerge.lookahead_off)
+
+dayNum(d) =>
+    d == "Tuesday" ? 2 : d == "Wednesday" ? 3 : d == "Thursday" ? 4 : 5
+
+isExpiryDay = dayofweek == dayNum(expiryDay)
+var float lastExpiryClose = na
+var float lastExpiryVIX   = na
+var int   lastExpiryBar   = na
+
+if isExpiryDay
+    lastExpiryClose := close
+    lastExpiryVIX   := vixClose
+    lastExpiryBar   := bar_index
+
+daysFromExpiry = na(lastExpiryBar) ? 1 : math.max(1, (bar_index - lastExpiryBar))
+vixRange       = na(lastExpiryClose) or na(lastExpiryVIX) ? na : lastExpiryClose * (lastExpiryVIX / 100.0) * math.sqrt(daysFromExpiry / 365.0)
+
+vixUpper  = na(vixRange) ? na : lastExpiryClose + vixRange
+vixLower  = na(vixRange) ? na : lastExpiryClose - vixRange
+vixUpper2 = na(vixRange) ? na : lastExpiryClose + vixRange * 2
+vixLower2 = na(vixRange) ? na : lastExpiryClose - vixRange * 2
+
+plot(showVIXLevels ? vixUpper          : na, "VIX +1σ",           color=color.new(#ff5722, 30), linewidth=vixLineWidth, style=plot.style_line)
+plot(showVIXLevels ? vixLower          : na, "VIX -1σ",           color=color.new(#ff5722, 30), linewidth=vixLineWidth, style=plot.style_line)
+plot(showVIXLevels ? vixUpper2         : na, "VIX +2σ",           color=color.new(#ff5722, 60), linewidth=1, style=plot.style_circles)
+plot(showVIXLevels ? vixLower2         : na, "VIX -2σ",           color=color.new(#ff5722, 60), linewidth=1, style=plot.style_circles)
+plot(showVIXLevels ? lastExpiryClose   : na, "Last Expiry Close", color=color.new(color.white, 50), linewidth=1, style=plot.style_circles)
+
+// ════════════════════════════════════════════════════════════
+// TREND ANALYSIS ENGINE
+// ════════════════════════════════════════════════════════════
+emaBullScore = 0
+emaBullScore += close > ema9   ? 1 : 0
+emaBullScore += close > ema27  ? 1 : 0
+emaBullScore += close > ema81  ? 1 : 0
+emaBullScore += close > ema108 ? 1 : 0
+emaBullScore += close > ema144 ? 1 : 0
+emaBullScore += close > ema216 ? 1 : 0
+emaBullScore += close > ema396 ? 1 : 0
+
+emaStackBull = ema9 > ema27 and ema27 > ema81 and ema81 > ema108 and ema108 > ema144 and ema144 > ema216 and ema216 > ema396
+emaStackBear = ema9 < ema27 and ema27 < ema81 and ema81 < ema108 and ema108 < ema144 and ema144 < ema216 and ema216 < ema396
+
+vwapBull    = close > vwapVal
+priceVsVwap = close > vwapVal ? "Above" : "Below"
+
+rsi14    = ta.rsi(close, 14)
+rsiState = rsi14 > 70 ? "OB 🔥" : rsi14 < 30 ? "OS ❄️" : rsi14 > 60 ? "Strong" : rsi14 < 40 ? "Weak" : "Neutral"
+
+[macdLine, signalLine, _] = ta.macd(close, 12, 26, 9)
+macdBull  = macdLine > signalLine and macdLine > 0
+macdBear  = macdLine < signalLine and macdLine < 0
+macdState = macdBull ? "Bull ↑" : macdBear ? "Bear ↓" : "Mixed"
+
+atr14  = ta.atr(14)
+atrPct = (atr14 / close) * 100
+
+volSMA   = ta.sma(volume, 20)
+volSpike = volume > volSMA * 1.5
+volState = volume > volSMA * 2 ? "🔥 Explosive" : volume > volSMA * 1.5 ? "High" : volume < volSMA * 0.7 ? "Low" : "Normal"
+
+trendScore = 0
+trendScore += emaBullScore
+trendScore += vwapBull ? 2 : -2
+trendScore += macdBull ? 2 : macdBear ? -2 : 0
+trendScore += rsi14 > 50 ? 1 : -1
+trendScore += emaStackBull ? 3 : emaStackBear ? -3 : 0
+
+trendDirection = trendScore >= 10 ? "🚀 STRONG BULL" : trendScore >= 5 ? "📈 BULLISH" : trendScore <= -10 ? "💥 STRONG BEAR" : trendScore <= -5 ? "📉 BEARISH" : "➡️ SIDEWAYS"
+trendColor     = trendScore >= 10 ? color.new(#00c853, 20) : trendScore >= 5 ? color.new(#76ff03, 30) : trendScore <= -10 ? color.new(#d50000, 20) : trendScore <= -5 ? color.new(#ff5252, 30) : color.new(#ffc107, 30)
+
+// ════════════════════════════════════════════════════════════
+// BUY/SELL SIGNALS
+// ════════════════════════════════════════════════════════════
+buySignal  = ta.crossover(ema9, ema27)  and close > vwapVal and trendScore >= 5
+sellSignal = ta.crossunder(ema9, ema27) and close < vwapVal and trendScore <= -5
+strongBuy  = ta.crossover(ema9, ema27)  and emaStackBull and macdBull and volSpike
+strongSell = ta.crossunder(ema9, ema27) and emaStackBear and macdBear and volSpike
+
+plotshape(showSignals and buySignal,  "Buy",         shape.triangleup,   location.belowbar, color.new(#00c853, 0), text="BUY",  textcolor=color.white, size=size.small)
+plotshape(showSignals and sellSignal, "Sell",        shape.triangledown, location.abovebar, color.new(#d50000, 0), text="SELL", textcolor=color.white, size=size.small)
+plotshape(showSignals and strongBuy,  "Strong Buy",  shape.labelup,      location.belowbar, color.new(#00c853, 0), text="🚀",  textcolor=color.white, size=size.normal)
+plotshape(showSignals and strongSell, "Strong Sell", shape.labeldown,    location.abovebar, color.new(#d50000, 0), text="💥",  textcolor=color.white, size=size.normal)
+
+// ════════════════════════════════════════════════════════════
+// DASHBOARD
+// ════════════════════════════════════════════════════════════
+getPos(p) =>
+    p == "Top Right" ? position.top_right : p == "Top Left" ? position.top_left : p == "Bottom Right" ? position.bottom_right : p == "Bottom Left" ? position.bottom_left : position.middle_right
+
+getSize(s) =>
+    s == "Tiny" ? size.tiny : s == "Small" ? size.small : s == "Large" ? size.large : size.normal
+
+var table dash = table.new(getPos(dashPos), 2, 16, bgcolor=color.new(#0a0e1a, 10), border_width=1, border_color=color.new(#d4a84b, 50), frame_width=1, frame_color=color.new(#d4a84b, 30))
+
+if showDashboard and barstate.islast
+    sz = getSize(dashSize)
+
+    table.cell(dash, 0, 0, "🔱 MAHADEV PRO", text_color=#d4a84b, text_size=sz, bgcolor=color.new(#1a1f2e, 0))
+    table.cell(dash, 1, 0, syminfo.ticker,    text_color=color.white, text_size=sz, bgcolor=color.new(#1a1f2e, 0))
+
+    table.cell(dash, 0, 1, "Trend", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 1, trendDirection, text_color=color.white, text_size=sz, bgcolor=trendColor)
+
+    table.cell(dash, 0, 2, "Score", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 2, str.tostring(trendScore) + " / 15", text_color=trendScore >= 0 ? #00c853 : #d50000, text_size=sz)
+
+    table.cell(dash, 0, 3, "LTP", text_color=color.gray, text_size=sz)
+    chgPct = ((close - close[1]) / close[1]) * 100
+    table.cell(dash, 1, 3, str.tostring(close, "#.##") + " (" + str.tostring(chgPct, "+#.##") + "%)", text_color=chgPct >= 0 ? #00c853 : #d50000, text_size=sz)
+
+    table.cell(dash, 0, 4, "EMA Stack", text_color=color.gray, text_size=sz)
+    emaStackText = emaStackBull ? "✅ Bullish" : emaStackBear ? "❌ Bearish" : "⚠️ Mixed"
+    emaStackCol  = emaStackBull ? color.new(#00c853, 60) : emaStackBear ? color.new(#d50000, 60) : color.new(#ffc107, 60)
+    table.cell(dash, 1, 4, emaStackText, text_color=color.white, text_size=sz, bgcolor=emaStackCol)
+
+    table.cell(dash, 0, 5, "Above EMAs", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 5, str.tostring(emaBullScore) + " / 7", text_color=emaBullScore >= 5 ? #00c853 : emaBullScore <= 2 ? #d50000 : #ffc107, text_size=sz)
+
+    table.cell(dash, 0, 6, "VWAP", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 6, priceVsVwap + " (" + str.tostring(vwapVal, "#.##") + ")", text_color=vwapBull ? #00c853 : #d50000, text_size=sz)
+
+    table.cell(dash, 0, 7, "RSI(14)", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 7, str.tostring(rsi14, "#.#") + " " + rsiState, text_color=color.white, text_size=sz)
+
+    table.cell(dash, 0, 8, "MACD", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 8, macdState, text_color=macdBull ? #00c853 : macdBear ? #d50000 : color.gray, text_size=sz)
+
+    table.cell(dash, 0, 9, "Volume", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 9, volState, text_color=volSpike ? #ff9800 : color.white, text_size=sz)
+
+    table.cell(dash, 0, 10, "ATR %", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 10, str.tostring(atrPct, "#.##") + "%", text_color=color.white, text_size=sz)
+
+    table.cell(dash, 0, 11, "VIX", text_color=color.gray, text_size=sz)
+    vixText = na(vixClose) ? "N/A" : str.tostring(vixClose, "#.##")
+    vixCol  = na(vixClose) ? color.gray : vixClose > 20 ? #d50000 : vixClose > 15 ? #ffc107 : #00c853
+    table.cell(dash, 1, 11, vixText, text_color=vixCol, text_size=sz)
+
+    table.cell(dash, 0, 12, "VIX Range", text_color=color.gray, text_size=sz)
+    rangeText = na(vixRange) ? "N/A" : "±" + str.tostring(vixRange, "#.#")
+    table.cell(dash, 1, 12, rangeText, text_color=color.white, text_size=sz)
+
+    table.cell(dash, 0, 13, "Days from Exp", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 13, str.tostring(daysFromExpiry), text_color=color.white, text_size=sz)
+
+    table.cell(dash, 0, 14, "Signal", text_color=color.gray, text_size=sz)
+    sigText = strongBuy ? "🚀 STRONG BUY" : buySignal ? "📈 BUY" : strongSell ? "💥 STRONG SELL" : sellSignal ? "📉 SELL" : "⏸️ HOLD"
+    sigCol  = strongBuy or buySignal ? color.new(#00c853, 50) : strongSell or sellSignal ? color.new(#d50000, 50) : color.new(color.gray, 70)
+    table.cell(dash, 1, 14, sigText, text_color=color.white, text_size=sz, bgcolor=sigCol)
+
+    table.cell(dash, 0, 15, "Updated", text_color=color.gray, text_size=sz)
+    table.cell(dash, 1, 15, str.format_time(time, "HH:mm", "Asia/Kolkata"), text_color=color.gray, text_size=sz)
+
+// ════════════════════════════════════════════════════════════
+// ALERTS
+// ════════════════════════════════════════════════════════════
+alertcondition(buySignal,                     "Buy Signal",        "🟢 Buy: EMA9 crossed above EMA27, price above VWAP")
+alertcondition(sellSignal,                    "Sell Signal",       "🔴 Sell: EMA9 crossed below EMA27, price below VWAP")
+alertcondition(strongBuy,                     "Strong Buy",        "🚀 STRONG BUY: All EMAs aligned + MACD bull + Volume spike")
+alertcondition(strongSell,                    "Strong Sell",       "💥 STRONG SELL: All EMAs aligned bear + MACD bear + Volume spike")
+alertcondition(volSpike,                      "Volume Spike",      "🔥 Volume spike detected (>1.5x avg)")
+alertcondition(ta.crossover(close, vwapVal),  "VWAP Cross Up",     "✅ Price crossed above VWAP")
+alertcondition(ta.crossunder(close, vwapVal), "VWAP Cross Down",   "❌ Price crossed below VWAP")

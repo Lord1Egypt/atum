@@ -1,0 +1,302 @@
+//@version=6
+// ES 4PM Close + Gap Levels  —  a LOOKAHEAD gap indicator.
+// Copyright (c) 2026 Christopher Pohl. Released under the MIT License.
+// Source & license: https://github.com/artherion77/tradingview-scripts
+//
+// The 4PM-close-keyed levels (red 4PM line, grey +/-handles, white pivot) are FIXED the
+// moment the 16:00 ET close prints, so they are drawn THEN — projected forward into the
+// next session (a "rubber band" pinned to the close; price stretches it, it tends to snap
+// back). Their start/end are still configurable anchors; at 16:00 the next session's
+// 01:00 / 09:30 / 13:00 / 16:00 are PROJECTED (weekend-aware), then SNAPPED to exact times
+// at midnight NY (when the session is confirmed trading), with the 09:30 open as backstop.
+// The half-gap (yellow) and 09:30-open (aqua) need the open price, so they join at 09:30.
+//
+// Levels (all key off the prior RTH 16:00 close + today's 09:30 open):
+// - Red    : prior 16:00 close            (default Prior 16:00 -> Today 16:00, dotted)  @16:00
+// - Grey   : prior close +/-10/20/30 pts   (default Today 01:00 -> Today 16:00, solid)  @16:00
+// - White  : daily pivot (prevH+prevL+prevC)/3 (optional, Today 13:00 -> 16:00, dotted) @16:00
+// - Yellow : half-gap = mid(prior close, 09:30 open) (Today 09:30 -> Today 16:00, dotted) @09:30
+// - Aqua   : today's 09:30 open (optional)  (default Today 09:30 -> Today 16:00, dashed) @09:30
+// - Fill markers (optional): first full-fill touch of the prior 16:00 close, split per the
+//   dashboard spec into "O/N fill" (Asia/London 20:00-05:00) and "BB fill" (pre-market 07:00-09:30 ET).
+//
+// Anchor prices/times come from a 5-minute feed so 00:00 / 01:00 / 09:30 / 13:00 / 16:00 are
+// exact boundaries -> levels are identical on any chart timeframe (15m, 1h, ...).
+//
+// Settings panel: each line is two compact rows (Show/color/style, then From/to), under
+// collapsible group headers. All inputs use display.none -> nothing clutters the status line.
+indicator("ES 4PM + Gap Levels", "4PM+Gaps", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+string TZ = "America/New_York"
+
+// ── Input groups ─────────────────────────────────────────────────────────────
+string GEN = "General"
+string GR  = "4PM close (reference)"
+string GO  = "Offset handles"
+string GG  = "Half-gap"
+string GOP = "09:30 open"
+string GPV = "Daily pivot"
+string GPN = "Fill markers (O/N + BB)"
+
+int    showDays  = input.int (1,    "Days to show", minval = 1, maxval = 30, group = GEN, display = display.none, tooltip = "1 = today only. Higher values draw prior days too.")
+bool   showLbl   = input.bool(true, "Labels", inline = "gen", group = GEN, display = display.none)
+float  lblNudge  = input.float(1.0, "nudge up (pts)", minval = 0, inline = "gen", group = GEN, display = display.none, tooltip = "Raises labels off their lines so text doesn't overlap.")
+
+// 4PM close (reference)
+bool   showRed   = input.bool  (true,         "Show", inline = "r1", group = GR, display = display.none)
+color  cAnchor   = input.color (color.red,    "",     inline = "r1", group = GR, display = display.none)
+string redStyle  = input.string("Dotted",     "",     options = ["Solid","Dotted","Dashed"], inline = "r1", group = GR, display = display.none)
+string redStart  = input.string("Prior 16:00","From", options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "r2", group = GR, display = display.none)
+string redEnd    = input.string("Today 16:00","to",   options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "r2", group = GR, display = display.none)
+
+// Offset handles
+bool   showOff   = input.bool  (true,         "Show", inline = "o1", group = GO, display = display.none)
+color  cOff      = input.color (color.gray,   "",     inline = "o1", group = GO, display = display.none)
+string offStyle  = input.string("Solid",      "",     options = ["Solid","Dotted","Dashed"], inline = "o1", group = GO, display = display.none)
+string offStart  = input.string("Today 01:00","From", options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "o2", group = GO, display = display.none)
+string offEnd    = input.string("Today 16:00","to",   options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "o2", group = GO, display = display.none)
+int    o1        = input.int (10, "pts", minval = 1, inline = "o3", group = GO, display = display.none)
+int    o2        = input.int (20, "/",   minval = 1, inline = "o3", group = GO, display = display.none)
+int    o3        = input.int (30, "/",   minval = 1, inline = "o3", group = GO, display = display.none)
+
+// Half-gap
+bool   showGap   = input.bool  (true,         "Show", inline = "g1", group = GG, display = display.none)
+color  cGap      = input.color (color.yellow, "",     inline = "g1", group = GG, display = display.none)
+string gapStyle  = input.string("Dotted",     "",     options = ["Solid","Dotted","Dashed"], inline = "g1", group = GG, display = display.none)
+string gapStart  = input.string("Today 09:30","From", options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "g2", group = GG, display = display.none)
+string gapEnd    = input.string("Today 16:00","to",   options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "g2", group = GG, display = display.none)
+
+// 09:30 open
+bool   showOpen  = input.bool  (false,        "Show", inline = "p1", group = GOP, display = display.none)
+color  cOpen     = input.color (color.aqua,   "",     inline = "p1", group = GOP, display = display.none)
+string openStyle = input.string("Dashed",     "",     options = ["Solid","Dotted","Dashed"], inline = "p1", group = GOP, display = display.none)
+string openStart = input.string("Today 09:30","From", options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "p2", group = GOP, display = display.none)
+string openEnd   = input.string("Today 16:00","to",   options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "p2", group = GOP, display = display.none)
+
+// Daily pivot
+bool   showPivot = input.bool  (true,         "Show", inline = "v1", group = GPV, display = display.none, tooltip = "Daily pivot = (prevHigh + prevLow + prevClose) / 3, from the prior RTH session.")
+color  cPivot    = input.color (color.white,  "",     inline = "v1", group = GPV, display = display.none)
+string pivStyle  = input.string("Dotted",     "",     options = ["Solid","Dotted","Dashed"], inline = "v1", group = GPV, display = display.none)
+string pivStart  = input.string("Today 13:00","From", options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "v2", group = GPV, display = display.none)
+string pivEnd    = input.string("Today 16:00","to",   options = ["Prior 16:00","Today 01:00","Today 09:30","Today 13:00","Today 16:00"], inline = "v2", group = GPV, display = display.none)
+
+// Fill markers
+bool   showPreNY = input.bool  (false,        "Show", inline = "n1", group = GPN, display = display.none, tooltip = "First full-fill touch of the prior 16:00 close, before the open. Split: O/N = Asia/London (20:00-05:00); BB = pre-market (07:00-09:30 ET).")
+color  cPreNY    = input.color (color.orange, "",     inline = "n1", group = GPN, display = display.none)
+
+// ── Source anchor prices + times (+ pre-RTH fill flags, prior-day H/L) from a 5-min feed ──
+f_levels() =>
+    var float pc       = na     // prior RTH 16:00 close
+    var int   pcTime   = na     // prior 16:00 bar time
+    var int   oneTime  = na     // most recent 01:00 ET bar time
+    var float dOpen    = na     // today 09:30 open
+    var int   ost      = na     // today 09:30 bar time
+    var int   midT     = na     // most recent 00:00 ET bar time (trading-day confirm)
+    var float rthHi    = na     // running RTH session high
+    var float rthLo    = na     // running RTH session low
+    var float prevHigh = na     // prior RTH session high (pivot)
+    var float prevLow  = na     // prior RTH session low  (pivot)
+    var bool  onFill   = false  // Asia/London full-fill of prior close?
+    var int   onFT     = na
+    var float onFOpen  = na
+    var bool  bbFill   = false  // pre-market (07:00-09:30) full-fill?
+    var int   bbFT     = na
+    var float bbFOpen  = na
+    bool inR  = not na(time("5", "0930-1600", TZ))
+    bool newS = inR and not inR[1]
+    bool endS = (not inR) and inR[1]
+    int  h    = hour(time, TZ)
+    int  m    = minute(time, TZ)
+    if newS
+        rthHi := high
+        rthLo := low
+        dOpen := open
+        ost   := time
+    else if inR
+        rthHi := math.max(rthHi, high)
+        rthLo := math.min(rthLo, low)
+    if endS
+        pc       := close[1]    // last RTH bar's close == 16:00 print
+        pcTime   := time        // this bar opens at 16:00 -> its time IS 16:00 ET
+        prevHigh := rthHi
+        prevLow  := rthLo
+        onFill   := false       // fresh pre-RTH cycle
+        onFT     := na
+        onFOpen  := na
+        bbFill   := false
+        bbFT     := na
+        bbFOpen  := na
+    if h == 0 and m == 0
+        midT := time            // 00:00 ET bar -> the session is a confirmed trading day
+    if h == 1 and m == 0
+        oneTime := time         // 01:00 ET bar (handles' default left anchor)
+    // Pre-RTH full-fill scans (same +/-0.5 touch zone). Split per gap-definition §7.6:
+    //   O/N = Asia [20:00-00:00) U London [02:00-05:00) ; BB = pre-market [07:00-09:30) ET.
+    bool touch = not na(pc) and high >= pc - 0.5 and low <= pc + 0.5
+    bool onWin = h >= 20 or (h >= 2 and h < 5)
+    bool bbWin = (h >= 7 and h < 9) or (h == 9 and m < 30)
+    if onWin and touch and not onFill
+        onFill  := true
+        onFT    := time
+        onFOpen := open
+    if bbWin and touch and not bbFill
+        bbFill  := true
+        bbFT    := time
+        bbFOpen := open
+    [pc, pcTime, oneTime, dOpen, ost, midT, prevHigh, prevLow, onFill, onFT, onFOpen, bbFill, bbFT, bbFOpen]
+
+[prevClose, prevCloseTime, oneTime, todayOpen, openTime, midTime, prevHigh, prevLow, onFill, onFillTime, onFillOpen, bbFill, bbFillTime, bbFillOpen] = request.security(syminfo.tickerid, "5", f_levels(), lookahead = barmerge.lookahead_off)
+
+bool newClose = not na(prevCloseTime) and (na(prevCloseTime[1]) or prevCloseTime != prevCloseTime[1])  // 16:00 lock
+bool newMid   = not na(midTime)       and (na(midTime[1])       or midTime       != midTime[1])         // 00:00 confirm
+bool newDay   = not na(openTime)      and (na(openTime[1])      or openTime      != openTime[1])        // 09:30 open
+
+// ── Anchor / style resolvers ─────────────────────────────────────────────────
+// a=Prior16:00 b=Today01:00 d=Today09:30 e=Today13:00 f=Today16:00 (epoch ms).
+f_anchor(string c, int a, int b, int d, int e, int f) =>
+    switch c
+        "Prior 16:00" => a
+        "Today 01:00" => b
+        "Today 09:30" => d
+        "Today 13:00" => e
+        "Today 16:00" => f
+        => f
+
+f_style(string s) =>
+    switch s
+        "Solid"  => line.style_solid
+        "Dotted" => line.style_dotted
+        "Dashed" => line.style_dashed
+        => line.style_solid
+
+// ── Drawing state (flat arrays + per-day counts -> trim whole oldest days) ───
+var array<line>  allL = array.new<line>()
+var array<label> allT = array.new<label>()
+var array<int>   dcL  = array.new<int>()
+var array<int>   dcT  = array.new<int>()
+var int dayStartL  = na   // index in allL where the in-progress day's lines begin
+var int dayStartT  = na
+var int dayProjOpen = na  // the 09:30 time the in-progress day's 16:00-levels were drawn against
+
+// ms offsets within a single trading day (no weekend/DST gap inside a session).
+int MS_01_FROM_OPEN = 30600000   // 01:00 = 09:30 - 8.5h
+int MS_13_FROM_OPEN = 12600000   // 13:00 = 09:30 + 3.5h
+int MS_16_FROM_OPEN = 23400000   // 16:00 = 09:30 + 6.5h
+int MS_OPEN_FROM_MID = 34200000  // 09:30 = 00:00 + 9.5h
+int MS_NEXTOPEN      = 63000000  // next 09:30 = prior 16:00 + 17.5h
+int MS_WEEKEND       = 172800000 // +48h (Fri close -> Mon open)
+
+mkSeg(int x1, int x2, float price, color col, string sty, int w) =>
+    int xx2 = x2 == x1 ? x1 + 60000 : x2
+    array.push(allL, line.new(x1, price, xx2, price, xloc = xloc.bar_time, color = col, style = sty, width = w))
+
+mkLbl(int x, float price, string txt, color col) =>
+    if showLbl
+        array.push(allT, label.new(x, price + lblNudge, txt, xloc = xloc.bar_time, style = label.style_label_right, color = color.new(col, 100), textcolor = col, size = size.small))
+
+// The 16:00-keyed levels (red, grey handles, pivot). openT is the session's 09:30 — PROJECTED
+// at the 16:00 draw, then the EXACT value when re-drawn at the midnight/09:30 snap.
+drawRefLevels(int aA, int openT) =>
+    int aB = openT - MS_01_FROM_OPEN
+    int aD = openT
+    int aE = openT + MS_13_FROM_OPEN
+    int aF = openT + MS_16_FROM_OPEN
+    if showRed
+        mkSeg(f_anchor(redStart,aA,aB,aD,aE,aF), f_anchor(redEnd,aA,aB,aD,aE,aF), prevClose, cAnchor, f_style(redStyle), 2)
+        mkLbl(f_anchor(redEnd,aA,aB,aD,aE,aF), prevClose, "4PM", cAnchor)
+    if showOff
+        int hS = f_anchor(offStart,aA,aB,aD,aE,aF)
+        int hE = f_anchor(offEnd,  aA,aB,aD,aE,aF)
+        string hSt = f_style(offStyle)
+        mkSeg(hS, hE, prevClose + o1, cOff, hSt, 1)
+        mkSeg(hS, hE, prevClose + o2, cOff, hSt, 1)
+        mkSeg(hS, hE, prevClose + o3, cOff, hSt, 1)
+        mkSeg(hS, hE, prevClose - o1, cOff, hSt, 1)
+        mkSeg(hS, hE, prevClose - o2, cOff, hSt, 1)
+        mkSeg(hS, hE, prevClose - o3, cOff, hSt, 1)
+        mkLbl(hE, prevClose + o1, "+" + str.tostring(o1), cOff)
+        mkLbl(hE, prevClose + o2, "+" + str.tostring(o2), cOff)
+        mkLbl(hE, prevClose + o3, "+" + str.tostring(o3), cOff)
+        mkLbl(hE, prevClose - o1, "-" + str.tostring(o1), cOff)
+        mkLbl(hE, prevClose - o2, "-" + str.tostring(o2), cOff)
+        mkLbl(hE, prevClose - o3, "-" + str.tostring(o3), cOff)
+    if showPivot and not na(prevHigh) and not na(prevLow)
+        float piv = (prevHigh + prevLow + prevClose) / 3.0
+        int pS = f_anchor(pivStart,aA,aB,aD,aE,aF)
+        int pE = f_anchor(pivEnd,  aA,aB,aD,aE,aF)
+        mkSeg(pS, pE, piv, cPivot, f_style(pivStyle), 1)
+        mkLbl(pE, piv, "Pivot", cPivot)
+
+// The 09:30-keyed levels (half-gap, open) + the pre-RTH fill markers. Real openTime only.
+drawSession(int openT) =>
+    int aA = prevCloseTime
+    int aB = oneTime
+    int aD = openT
+    int aE = openT + MS_13_FROM_OPEN
+    int aF = openT + MS_16_FROM_OPEN
+    float half = (prevClose + todayOpen) / 2.0
+    if showGap
+        mkSeg(f_anchor(gapStart,aA,aB,aD,aE,aF), f_anchor(gapEnd,aA,aB,aD,aE,aF), half, cGap, f_style(gapStyle), 2)
+        mkLbl(f_anchor(gapEnd,aA,aB,aD,aE,aF), half, "½ Gap", cGap)
+    if showOpen
+        mkSeg(f_anchor(openStart,aA,aB,aD,aE,aF), f_anchor(openEnd,aA,aB,aD,aE,aF), todayOpen, cOpen, f_style(openStyle), 1)
+        mkLbl(f_anchor(openEnd,aA,aB,aD,aE,aF), todayOpen, "Open", cOpen)
+    // Fill markers — placed on the side the candle did NOT come from (open below close -> mark above).
+    if showPreNY and onFill and not na(onFillTime)
+        bool ab = not na(onFillOpen) and onFillOpen < prevClose
+        array.push(allT, label.new(onFillTime, prevClose, "O/N fill", xloc = xloc.bar_time, yloc = ab ? yloc.abovebar : yloc.belowbar, style = ab ? label.style_label_down : label.style_label_up, color = color.new(cPreNY, 75), textcolor = cPreNY, size = size.small))
+    if showPreNY and bbFill and not na(bbFillTime)
+        bool ab2 = not na(bbFillOpen) and bbFillOpen < prevClose
+        array.push(allT, label.new(bbFillTime, prevClose, "BB fill", xloc = xloc.bar_time, yloc = ab2 ? yloc.abovebar : yloc.belowbar, style = ab2 ? label.style_label_down : label.style_label_up, color = color.new(cPreNY, 75), textcolor = cPreNY, size = size.small))
+
+// Snap the in-progress day's 16:00-levels to a (now exact) 09:30 time. Same line objects'
+// VALUES never change — only their projected x-extent is corrected. No-op when not drifted.
+snapRefs(int realOpen) =>
+    while array.size(allL) > dayStartL
+        line.delete(array.pop(allL))
+    while array.size(allT) > dayStartT
+        label.delete(array.pop(allT))
+    drawRefLevels(prevCloseTime, realOpen)
+
+// ── 16:00: close locks -> begin the day, draw the 16:00-keyed levels PROJECTED forward ──
+if newClose and not na(prevClose) and not na(prevCloseTime)
+    dayStartL  := array.size(allL)
+    dayStartT  := array.size(allT)
+    int projOpen = prevCloseTime + MS_NEXTOPEN + (dayofweek(prevCloseTime, TZ) == dayofweek.friday ? MS_WEEKEND : 0)
+    dayProjOpen := projOpen
+    drawRefLevels(prevCloseTime, projOpen)
+
+// ── 00:00: trading day confirmed -> snap the projected levels to exact times (fixes DST) ──
+if newMid and not na(dayStartL) and not na(midTime)
+    int realOpen = midTime + MS_OPEN_FROM_MID
+    if realOpen != dayProjOpen
+        snapRefs(realOpen)
+        dayProjOpen := realOpen
+
+// ── 09:30: add the open-keyed levels (+ markers); backstop-snap; finalize + trim the day ──
+if newDay and not na(prevClose) and not na(prevCloseTime) and not na(oneTime) and not na(todayOpen) and not na(openTime)
+    if na(dayStartL)
+        // Loaded mid-session (no 16:00 / 00:00 seen) — draw the 16:00-keyed levels now, exact.
+        dayStartL := array.size(allL)
+        dayStartT := array.size(allT)
+        drawRefLevels(prevCloseTime, openTime)
+    else if openTime != dayProjOpen
+        // Still drifted at the open (e.g. a full-holiday day had no midnight bar) — snap now.
+        snapRefs(openTime)
+    drawSession(openTime)
+    array.push(dcL, array.size(allL) - dayStartL)
+    array.push(dcT, array.size(allT) - dayStartT)
+    dayStartL  := na
+    dayStartT  := na
+    dayProjOpen := na
+    while array.size(dcL) > showDays
+        int nL = array.shift(dcL)
+        int nT = array.shift(dcT)
+        int k = 0
+        while k < nL
+            line.delete(array.shift(allL))
+            k += 1
+        int j = 0
+        while j < nT
+            label.delete(array.shift(allT))
+            j += 1

@@ -1,0 +1,53 @@
+//@version=5
+indicator("operators/logical")
+// Test logical operators
+
+// AND operator
+and1 = true and true
+and2 = true and false
+and3 = false and true
+and4 = false and false
+
+// OR operator
+or1 = true or true
+or2 = true or false
+or3 = false or true
+or4 = false or false
+
+// NOT operator
+not1 = not true
+not2 = not false
+
+// Combined logical expressions
+comb1 = true and (false or true)
+comb2 = (true or false) and false
+comb3 = not (true and false)
+
+log.info(str.tostring(and1))
+log.info(str.tostring(and2))
+log.info(str.tostring(and3))
+log.info(str.tostring(and4))
+log.info(str.tostring(or1))
+log.info(str.tostring(or2))
+log.info(str.tostring(or3))
+log.info(str.tostring(or4))
+log.info(str.tostring(not1))
+log.info(str.tostring(not2))
+log.info(str.tostring(comb1))
+log.info(str.tostring(comb2))
+log.info(str.tostring(comb3))
+
+// Expected output:
+// true
+// false
+// false
+// false
+// true
+// true
+// true
+// false
+// false
+// true
+// true
+// false
+// true

@@ -1,0 +1,83 @@
+//@version=6
+indicator(title="Stochastic", shorttitle="Stoch", format=format.price, precision=2, timeframe="", timeframe_gaps=true)
+periodK = input.int(14, title="%K Length", minval=1)
+smoothK = input.int(3, title="%K Smoothing", minval=1)
+periodD = input.int(3, title="%D Smoothing", minval=1)
+k = ta.sma(ta.stoch(close, high, low, periodK), smoothK)
+d = ta.sma(k, periodD)
+plot(k, title="%K", color=#2962FF)
+plot(d, title="%D", color=#FF6D00)
+h0 = hline(80, "Upper Band", color=#787B86)
+hline(50, "Middle Band", color=color.new(#787B86, 50))
+h1 = hline(20, "Lower Band", color=#787B86)
+fill(h0, h1, color=color.rgb(33, 150, 243, 90), title="Background")
+periodKB = input.int(110, title="%K Length", minval=1)
+smoothKB = input.int(3, title="%K Smoothing", minval=1)
+periodDB = input.int(3, title="%D Smoothing", minval=1)
+kB = ta.sma(ta.stoch(close, high, low, periodKB), smoothKB)
+dB = ta.sma(kB, periodDB)
+plot(kB, title="%K", color=color.green)
+plot(dB, title="%D", color=color.aqua)
+h0B = hline(80, "Upper Band", color=#787B86)
+hline(50, "Middle Band", color=color.new(#787B86, 50))
+h1B = hline(20, "Lower Band", color=#787B86)
+
+src = hlc3
+mf = ta.mfi(src, periodK)
+plot(mf, "MF", color=color.yellow)
+
+hline(50, "Middle Band", color=color.new(#787B86, 50))
+oversold=hline(20, title="Oversold", color=#787B86)
+
+// DMI
+
+// Input parameters
+adxLength = input(14, title = 'ADX Length')
+adxThreshold = input(14, title = 'ADX Threshold for Strong Trend')
+diLength = input(3, title = 'DI Length')
+exitOnWeakTrend = input(false, title = 'Exit When Trend Weakens')
+flatThreshold = input.float(5.0, title = 'Flat Threshold (DI Spread)', minval = 0.1, maxval = 20.0, step = 0.5, tooltip = 'Min difference between DI+ and DI- to avoid flat markets')
+
+// Calculate ADX and DIs
+[diPlus, diMinus, adx] = ta.dmi(diLength, adxLength)
+
+// Calculate DI spread and average
+diSpread = math.abs(diPlus - diMinus)
+diAverage = (diPlus + diMinus) / 2
+
+// Determine if market is flat (DI values too close)
+isFlat = diSpread < flatThreshold
+
+// Determine trend conditions
+uptrend = diPlus > diMinus and adx >= adxThreshold
+downtrend = diMinus > diPlus and adx >= adxThreshold
+weakTrend = adx < adxThreshold
+
+// Entry conditions (with flat filter)
+longCondition = ta.crossover(diPlus, diMinus) and adx >= adxThreshold and not isFlat
+shortCondition = ta.crossover(diMinus, diPlus) and adx >= adxThreshold and not isFlat
+
+bool crossUnder = ta.crossunder(diPlus, diMinus)
+bool crossOver = ta.crossover(diPlus, diMinus)
+
+// Exit conditions
+exitLong = exitOnWeakTrend ? weakTrend or crossUnder : crossUnder
+exitShort = exitOnWeakTrend ? weakTrend or crossOver : crossOver
+
+hline(adxThreshold, title = 'ADX Threshold', color = color.new(color.gray, 0), linestyle = hline.style_dotted)
+
+// Plot flat threshold line
+hline(flatThreshold, title = 'Flat Threshold', color = color.new(color.orange, 70), linestyle = hline.style_dashed)
+
+// Background coloring
+bgcolor(uptrend ? color.new(color.green, 90) : downtrend ? color.new(color.red, 90) : na, title = 'Trend Strength Background')
+bgcolor(isFlat ? color.new(color.orange, 80) : na, title = 'Flat Market Background')
+
+
+[macdLine, signalLine, histLine] = ta.macd(close, 12, 21, 9)    // classical macd // mayne use Fibo for MACD ?
+
+bool histLineWarningUp = (histLine > histLine[1] and histLine[1] < histLine[2] and histLine[2] < histLine[3]) and (kB <= 20 and dB <=20 and mf<40)
+bgcolor(histLineWarningUp ? color.new(color.white, 50) : na, title = 'Flat Market Background')
+
+
+//plotshape(series = showArrow, style = shape.arrowup, color = color.red, location = location.belowbar, size = size.normal, title = "Бычья стрелка")    

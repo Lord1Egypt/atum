@@ -1,0 +1,13 @@
+//@version=3
+study("builtins/input_v3")
+// v3 input(): the type is an argument given as a bare constant (`type=integer`).
+//
+// v3 has no `log.*` namespace — bare `log` is math's natural logarithm — so this
+// fixture can't print. It asserts the v3 syntax compiles and runs cleanly; the
+// returned values are asserted in input_v5.pine.
+length = input(14, "Length", type=integer, minval=1)
+factor = input(2.5, "Factor", type=float)
+useClose = input(true, "Use Close", type=bool)
+maType = input("EMA", "MA Type", options=["EMA", "SMA"])
+
+// Expected output:

@@ -1,0 +1,82 @@
+//@version=5
+indicator("UT Bot + Linear Regression Combo", shorttitle="UT+LR Combo", overlay=true, format=format.price, precision=2, max_labels_count=500)
+
+// =========================================================================
+// 1) UT BOT ALERTS SETTINGS
+// =========================================================================
+grp_ut = "UT Bot Alerts"
+keyV      = input.float(2.0, "Key Value (Sensitivity)", group=grp_ut)
+atrPeriod = input.int(1, "ATR Period", group=grp_ut)
+
+// UT Bot calculation
+xATR  = ta.atr(atrPeriod)
+nLoss = keyV * xATR 
+
+var float trailingStop = na
+
+if not na(xATR)
+    if na(trailingStop)
+        trailingStop := close > nz(close[1], close) ? close - nLoss : close + nLoss
+    else if close > trailingStop[1] and close[1] > trailingStop[1]
+        trailingStop := math.max(trailingStop[1], close - nLoss)
+    else if close < trailingStop[1] and close[1] < trailingStop[1]
+        trailingStop := math.min(trailingStop[1], close + nLoss)
+    else if close > trailingStop[1]
+        trailingStop := close - nLoss
+    else
+        trailingStop := close + nLoss
+
+var int utPos = 0
+utPos := not na(trailingStop) ? (close > trailingStop ? 1 : -1) : 0
+
+// =========================================================================
+// 2) LINEAR REGRESSION CANDLES SETTINGS
+// =========================================================================
+grp_lr = "Linear Regression Candles"
+lrLen    = input.int(11, "Linear Regression Length", group=grp_lr)
+lrSmooth = input.int(7, "Signal Smoothing", group=grp_lr)
+showLR   = input.bool(false, "Show LinReg Candles", group=grp_lr)
+
+// LinReg calculation
+bopen  = ta.linreg(open,  lrLen, 0)
+bhigh  = ta.linreg(high,  lrLen, 0)
+blow   = ta.linreg(low,   lrLen, 0)
+bclose = ta.linreg(close, lrLen, 0)
+
+// LinReg candle colour
+lrGreen = bclose > bopen
+lrRed   = bclose <= bopen
+
+// =========================================================================
+// 3) COMBINED SIGNAL LOGIC (WITH SIGNAL LOCK)
+// =========================================================================
+
+// Both indicators point the same way
+isCommonBull = lrGreen and utPos == 1
+isCommonBear = lrRed   and utPos == -1
+
+// Signal lock: only allows a BUY -> SELL -> BUY cycle
+var int lastSignal = 0 // 1: long, -1: short
+
+buyCondition  = isCommonBull and lastSignal != 1
+sellCondition = isCommonBear and lastSignal != -1
+
+if buyCondition
+    lastSignal := 1
+if sellCondition
+    lastSignal := -1
+
+// =========================================================================
+// PLOTTING
+// =========================================================================
+
+// LinReg candles (hidden / optional)
+plotcandle(showLR ? bopen : na, showLR ? bhigh : na, showLR ? blow : na, showLR ? bclose : na, title="LinReg Candles", color=lrGreen ? color.lime : color.red, wickcolor=lrGreen ? color.lime : color.red, bordercolor=lrGreen ? color.lime : color.red)
+
+// MAIN SIGNALS (locked)
+plotshape(buyCondition,  title="BUY CONFIRMED", style=shape.labelup,   location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white, text="BUY",  size=size.normal)
+plotshape(sellCondition, title="SELL CONFIRMED", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0),   textcolor=color.white, text="SELL", size=size.normal)
+
+// Alerts
+alertcondition(buyCondition,  "UT+LinReg Buy!", "Both indicators confirm BUY!")
+alertcondition(sellCondition, "UT+LinReg Sell!", "Both indicators confirm SELL!")

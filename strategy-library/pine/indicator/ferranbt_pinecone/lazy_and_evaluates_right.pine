@@ -1,0 +1,9 @@
+//@version=5
+indicator("basics/lazy_and_evaluates_right")
+// A true left operand does not decide `and`, so the right operand IS evaluated.
+// Here that reaches an out-of-bounds array access, which errors — proving the
+// operand was not skipped.
+arr = array.new_float(0, 0.0)
+x = true and (array.get(arr, 0) > 0)
+
+// Expected error: Index out of bounds

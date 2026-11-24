@@ -1,0 +1,261 @@
+//@version=6
+// ============================================================================
+// Anchored VWAP [WavesUnchained]
+// Version: 1.1.0
+// Author: WavesUnchained
+// Build: 2026-11-17
+// ============================================================================
+// Volume-weighted average price anchored to a selectable origin (swing pivot,
+// session / week / month / year, or a manual date) with volume-weighted σ bands.
+// It shows where price stands relative to value (distance in σ); σ bands, stretched
+// flags and stretch alerts only appear once enough bars lie in the anchor window.
+//
+// Features:
+//   ✓ Anchor at auto swing pivot, period start, or manual timestamp
+//   ✓ Volume-weighted standard-deviation bands (two configurable multiples)
+//   ✓ Distance-from-value in σ as a symmetric Location output
+//   ✓ Bands, stretched flags and stretch alerts valid only after a minimum anchor window
+//   ✓ Anchor markers, light-theme dashboard, event alerts
+//
+// Data Contract:
+//   Price:     REQUIRED   chart symbol
+//   Volume:    REQUIRED   real trade volume — feed must deliver volume and
+//                         syminfo.volumetype must not be "tick"; otherwise not available
+//   OI:        NO
+//   Reference: NO
+//   Verdict:   Exchange-only
+//
+// ============================================================================
+
+indicator("Anchored VWAP [WavesUnchained]", "AVWAP", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+g_anchor = "1 · Anchor"
+anchorMode = input.string("Auto: Last Swing", "Anchor on",
+     options=["Auto: Last Swing", "Auto: Swing High", "Auto: Swing Low",
+              "Session", "Week", "Month", "Year", "Manual Date"], group=g_anchor)
+pivLeft    = input.int(5, "Swing Left Bars",  minval=1, group=g_anchor)
+pivR       = input.int(5, "Swing Right Bars", minval=1, group=g_anchor,
+     tooltip="Auto modes re-seed the VWAP from the actual pivot bar (pivR bars back), so value accrues from the real swing, not the confirmation bar.")
+anchorTime = input.time(timestamp("01 Jan 2024 00:00 +0000"), "Manual Anchor", group=g_anchor)
+srcSel     = input.source(hlc3, "Price Source", group=g_anchor)
+
+g_bands = "2 · Bands"
+showBands = input.bool(true, "Show σ Bands", group=g_bands)
+minAnchorBars = input.int(20, "Min bars since anchor", minval=2, group=g_bands,
+     tooltip="σ bands, stretched flags and stretch alerts appear only after this many bars since the anchor. Right after a re-anchor σ comes from very few bars, so band levels and distances in σ are not yet meaningful.")
+mult1     = input.float(1.0, "Band 1 (σ)", minval=0.0, step=0.25, group=g_bands)
+mult2     = input.float(2.0, "Band 2 (σ)", minval=0.0, step=0.25, group=g_bands)
+
+g_loc = "3 · Location"
+stretchSigma = input.float(2.0, "Stretched at (σ)", minval=0.5, step=0.25, group=g_loc,
+     tooltip="|distance| ≥ this σ → price is flagged as stretched above or below the AVWAP.")
+showStretch  = input.bool(true, "Show stretched markers", group=g_loc)
+
+g_disp = "4 · Display"
+showAnchor = input.bool(true, "Show anchor markers", group=g_disp)
+showTable  = input.bool(true, "Show dashboard", group=g_disp)
+tablePos   = input.string("Top Right", "Dashboard position",
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=g_disp)
+
+g_col = "5 · Colors"
+colVwap = input.color(#ff6f00,            "VWAP",  group=g_col)
+colUp   = input.color(#d50000,            "Above value", group=g_col)
+colDn   = input.color(#00c853,            "Below value", group=g_col)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA VALIDITY
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Echtes Handelsvolumen? Nur "tick" schließt aus; "n/a" zählt, wenn der Feed Volumen liefert (DATA_VALIDITY §2).
+bool volumeIsReal = (ta.cum(nz(volume)) > 0 and syminfo.volumetype != "tick") and not na(volume)
+
+float vol = volumeIsReal ? volume : na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANCHOR EVENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+float ph = ta.pivothigh(pivLeft, pivR)
+float pl = ta.pivotlow(pivLeft, pivR)
+bool isPivotMode = str.startswith(anchorMode, "Auto")
+
+// All ta.* computed globally for a consistent series (v6 pitfall: no conditional ta.*)
+bool chD = ta.change(time("D"))   != 0
+bool chW = ta.change(time("W"))   != 0
+bool chM = ta.change(time("M"))   != 0
+bool chY = ta.change(time("12M")) != 0
+
+bool evt = false
+if anchorMode == "Auto: Last Swing"
+    evt := not na(ph) or not na(pl)
+else if anchorMode == "Auto: Swing High"
+    evt := not na(ph)
+else if anchorMode == "Auto: Swing Low"
+    evt := not na(pl)
+else if anchorMode == "Session"
+    evt := chD
+else if anchorMode == "Week"
+    evt := chW
+else if anchorMode == "Month"
+    evt := chM
+else if anchorMode == "Year"
+    evt := chY
+else
+    evt := time >= anchorTime and time[1] < anchorTime
+
+bool active = anchorMode != "Manual Date" or time >= anchorTime
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VWAP ACCUMULATION  (running sums, reset on anchor event)
+// ─────────────────────────────────────────────────────────────────────────────
+
+var float sumPV  = na
+var float sumV   = na
+var float sumPV2 = na
+var int   anchorBar = na
+
+float src = srcSel
+
+if active
+    if evt or na(sumV)
+        sumPV  := 0.0
+        sumV   := 0.0
+        sumPV2 := 0.0
+        anchorBar := isPivotMode ? bar_index - pivR : bar_index
+        if isPivotMode
+            for i = pivR to 0
+                float p = nz(src[i])
+                float v = nz(vol[i])
+                sumPV  := sumPV + p * v
+                sumV   := sumV + v
+                sumPV2 := sumPV2 + p * p * v
+        else
+            sumPV  := src * vol
+            sumV   := vol
+            sumPV2 := src * src * vol
+    else
+        sumPV  := sumPV + src * vol
+        sumV   := sumV + vol
+        sumPV2 := sumPV2 + src * src * vol
+
+float vwap     = sumV > 0.0 ? sumPV / sumV : na
+float variance = sumV > 0.0 ? math.max(0.0, sumPV2 / sumV - vwap * vwap) : na
+float sd       = math.sqrt(variance)
+
+// σ is only meaningful once the anchor window holds enough bars
+bool sigmaMature = not na(anchorBar) and bar_index - anchorBar + 1 >= minAnchorBars
+
+float up1 = vwap + mult1 * sd
+float dn1 = vwap - mult1 * sd
+float up2 = vwap + mult2 * sd
+float dn2 = vwap - mult2 * sd
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOCATION OUTPUT  (distance from value in σ — symmetric)
+// ─────────────────────────────────────────────────────────────────────────────
+
+float distSigma = sigmaMature and sd > 0.0 ? (close - vwap) / sd : na
+bool stretchedUp = active and not na(distSigma) and distSigma >=  stretchSigma
+bool stretchedDn = active and not na(distSigma) and distSigma <= -stretchSigma
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLOTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+plot(active ? vwap : na, "AVWAP", color=colVwap, linewidth=2)
+
+bool bandsOn = active and showBands and sigmaMature
+pUp2 = plot(bandsOn ? up2 : na, "Upper Band 2", color=color.new(colUp, 60))
+pUp1 = plot(bandsOn ? up1 : na, "Upper Band 1", color=color.new(colUp, 75))
+pDn1 = plot(bandsOn ? dn1 : na, "Lower Band 1", color=color.new(colDn, 75))
+pDn2 = plot(bandsOn ? dn2 : na, "Lower Band 2", color=color.new(colDn, 60))
+
+fill(pUp1, pUp2, color=showBands ? color.new(colUp, 92) : na, title="Upper Band Fill")
+fill(pDn1, pDn2, color=showBands ? color.new(colDn, 92) : na, title="Lower Band Fill")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTEXT MARKERS  (where price stands, no entries)
+// ─────────────────────────────────────────────────────────────────────────────
+
+plotshape(showAnchor and evt and active and volumeIsReal, "Anchor",
+     style=shape.flag, location=location.belowbar, color=color.new(colVwap, 20), size=size.tiny)
+
+plotshape(showStretch and stretchedUp, "Stretched above AVWAP",
+     style=shape.triangledown, location=location.abovebar, color=color.new(colUp, 25), size=size.tiny)
+plotshape(showStretch and stretchedDn, "Stretched below AVWAP",
+     style=shape.triangleup, location=location.belowbar, color=color.new(colDn, 25), size=size.tiny)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DASHBOARD
+// ─────────────────────────────────────────────────────────────────────────────
+
+f_pos(string p) =>
+    switch p
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        =>                position.top_right
+
+var table t = table.new(f_pos(tablePos), 2, 6,
+     bgcolor=color.new(color.white, 5),
+     border_color=color.new(color.gray, 60),
+     border_width=1,
+     frame_color=color.new(color.gray, 40),
+     frame_width=1)
+
+color tc = color.new(color.gray, 20)
+color hd = color.new(color.gray, 90)
+
+if showTable and barstate.islast
+    table.cell(t, 0, 0, "ANCHORED VWAP", text_color=tc, bgcolor=hd, text_size=size.small)
+    table.cell(t, 1, 0, "v1.1.0", text_color=tc, bgcolor=hd, text_size=size.small)
+
+    table.cell(t, 0, 5, "Anchor", text_color=tc, text_size=size.small)
+    table.cell(t, 1, 5, anchorMode + (na(anchorBar) ? "" : " · " + str.tostring(bar_index - anchorBar + 1) + " bars"), text_color=tc, text_size=size.small)
+
+    table.cell(t, 0, 1, "AVWAP", text_color=tc, text_size=size.small)
+    table.cell(t, 1, 1, na(vwap) ? "—" : str.tostring(vwap, format.mintick), text_color=tc, text_size=size.small)
+
+    table.cell(t, 0, 2, "σ", text_color=tc, text_size=size.small)
+    table.cell(t, 1, 2, na(sd) ? "—" : sigmaMature ? str.tostring(sd, format.mintick) : "not yet valid", text_color=tc, text_size=size.small)
+
+    table.cell(t, 0, 3, "Distance (σ)", text_color=tc, text_size=size.small)
+    color dcol = na(distSigma) ? tc : (distSigma >= 0 ? colUp : colDn)
+    table.cell(t, 1, 3, na(distSigma) ? "—" : str.tostring(distSigma, "#.00"), text_color=dcol, text_size=size.small)
+
+    table.cell(t, 0, 4, "Location", text_color=tc, text_size=size.small)
+    string locTxt = not sigmaMature ? "—" : stretchedUp ? "Stretched above" : stretchedDn ? "Stretched below" : "Within ±" + str.tostring(stretchSigma) + "σ"
+    color  locCol = stretchedUp ? colUp : stretchedDn ? colDn : tc
+    table.cell(t, 1, 4, locTxt, text_color=locCol, text_size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA VALIDITY WARNING
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Kurzer Hinweis unten rechts; was fehlt, steht im Data Contract oben.
+var table volWarn = table.new(position.bottom_right, 1, 1)
+if barstate.islast and not volumeIsReal
+    table.cell(volWarn, 0, 0, "AVWAP · not available",
+         bgcolor = color.new(color.orange, 20), text_color = color.white, text_size = size.small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALERTS  (event descriptions, confirmed bar only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// A re-anchor moves the AVWAP itself — a cross on the anchor bar is not a price move.
+// ta.* evaluated unconditionally (v6 short-circuits `and`)
+bool xUp = ta.crossover(close, vwap)
+bool xDn = ta.crossunder(close, vwap)
+bool crossOk = barstate.isconfirmed and active and not evt and not na(vwap[1])
+alertcondition(crossOk and xUp, "Close Crossed Above AVWAP",
+     "AVWAP · close crossed above AVWAP · {{ticker}} {{interval}}")
+alertcondition(crossOk and xDn, "Close Crossed Below AVWAP",
+     "AVWAP · close crossed below AVWAP · {{ticker}} {{interval}}")
+alertcondition(barstate.isconfirmed and sigmaMature[1] and stretchedUp and not stretchedUp[1], "Close Beyond Upper Stretch",
+     "AVWAP · close beyond upper stretch level (σ) · {{ticker}} {{interval}}")
+alertcondition(barstate.isconfirmed and sigmaMature[1] and stretchedDn and not stretchedDn[1], "Close Beyond Lower Stretch",
+     "AVWAP · close beyond lower stretch level (σ) · {{ticker}} {{interval}}")

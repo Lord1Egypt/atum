@@ -1,0 +1,198 @@
+//@version=5
+indicator("Triple Trend Combo (NRTR + Supertrend + Twin Range)", overlay=true, max_labels_count=500)
+
+// =========================================================================
+// NRTR + SUPERTREND + TWIN RANGE FILTER
+// -------------------------------------------------------------------------
+// A combined signal system built from three trend indicators.
+// At least 2/3 confirmations = strong signal, 3/3 = very strong signal.
+// =========================================================================
+
+// ======================== NRTR SETTINGS ===================================
+grp_nrtr = "NRTR (Nick Rypock Trailing Reverse)"
+nrtrCoeff = input.float(8.0, "Coefficient of Correction, %", step=0.5, group=grp_nrtr)
+nrtrShowLabels = input.bool(true, "Show Buy/Sell Labels", group=grp_nrtr)
+nrtrHighlight = input.bool(true, "Highlight State", group=grp_nrtr)
+
+// ======================== SUPERTREND SETTINGS =============================
+grp_st = "Supertrend"
+stPeriod = input.int(10, "ATR Period", group=grp_st)
+stSource = input.source(hl2, "Source", group=grp_st)
+stMultiplier = input.float(1.0, "ATR Multiplier", step=0.1, group=grp_st)
+stChangeATR = input.bool(true, "Change ATR Calculation Method?", group=grp_st)
+stShowSignals = input.bool(true, "Show Buy/Sell Signals?", group=grp_st)
+stHighlighter = input.bool(true, "Highlighter On/Off?", group=grp_st)
+
+// ======================== TWIN RANGE FILTER SETTINGS ======================
+grp_trf = "Twin Range Filter"
+trfSource = input.source(close, "Source", group=grp_trf)
+trfFastPeriod = input.int(12, "Fast Period", group=grp_trf)
+trfFastRange = input.float(1.0, "Fast Range", step=0.1, group=grp_trf)
+trfSlowPeriod = input.int(4, "Slow Period", group=grp_trf)
+trfSlowRange = input.float(2.0, "Slow Range", step=0.1, group=grp_trf)
+
+// ======================== COMBINED SIGNAL SETTINGS ========================
+grp_combo = "Combined Signal"
+minConfirm = input.int(2, "Minimum Confirmations (2 or 3)", minval=1, maxval=3, group=grp_combo)
+showTable = input.bool(true, "Show Info Panel", group=grp_combo)
+
+
+// =========================================================================
+// 1) NRTR CALCULATION
+// =========================================================================
+k = nrtrCoeff / 100.0
+
+var float nrtrTrend = 0.0
+var float nrtrHP = close
+var float nrtrLP = close
+var int nrtrDir = 1  // 1 = long, -1 = short
+var float nrtrReverse = 0.0
+var float nrtrSupport = 0.0
+var float nrtrResistance = 0.0
+
+if nrtrDir == 1
+    nrtrHP := math.max(nrtrHP, close)
+    nrtrReverse := nrtrHP * (1 - k)
+    if close <= nrtrReverse
+        nrtrDir := -1
+        nrtrLP := close
+        nrtrReverse := nrtrLP * (1 + k)
+else
+    nrtrLP := math.min(nrtrLP, close)
+    nrtrReverse := nrtrLP * (1 + k)
+    if close >= nrtrReverse
+        nrtrDir := 1
+        nrtrHP := close
+        nrtrReverse := nrtrHP * (1 - k)
+
+nrtrSupport := nrtrDir == 1 ? nrtrReverse : na
+nrtrResistance := nrtrDir == -1 ? nrtrReverse : na
+
+nrtrBuy = nrtrDir == 1 and nrtrDir[1] == -1
+nrtrSell = nrtrDir == -1 and nrtrDir[1] == 1
+nrtrLong = nrtrDir == 1
+nrtrShort = nrtrDir == -1
+
+// NRTR plots
+// (support/resistance lines disabled)
+// plot(nrtrSupport, "NRTR Support", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
+// plot(nrtrResistance, "NRTR Resistance", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+// (background colours disabled)
+// bgcolor(nrtrHighlight and nrtrLong ? color.new(color.green, 93) : nrtrHighlight and nrtrShort ? color.new(color.red, 93) : na, title="NRTR Highlight")
+
+// NRTR signals (small B and S letters - GREEN/RED)
+plotshape(nrtrShowLabels and nrtrBuy ? nrtrReverse : na, "NRTR Buy", style=shape.labelup, location=location.absolute, color=color.green, textcolor=color.white, text="B", size=size.small)
+plotshape(nrtrShowLabels and nrtrSell ? nrtrReverse : na, "NRTR Sell", style=shape.labeldown, location=location.absolute, color=color.red, textcolor=color.white, text="S", size=size.small)
+// =========================================================================
+// 2) SUPERTREND CALCULATION
+// =========================================================================
+atrVal = stChangeATR ? ta.atr(stPeriod) : ta.sma(ta.tr, stPeriod)
+
+stUp = stSource - stMultiplier * atrVal
+stDn = stSource + stMultiplier * atrVal
+
+var float stUpBand = 0.0
+var float stDnBand = 0.0
+var int stTrend = 1
+
+stUpBand := nz(stUp[1]) != 0 and close[1] > nz(stUpBand[1]) ? math.max(stUp, nz(stUpBand[1])) : stUp
+stDnBand := nz(stDn[1]) != 0 and close[1] < nz(stDnBand[1]) ? math.min(stDn, nz(stDnBand[1])) : stDn
+
+stTrend := close > nz(stDnBand[1]) ? 1 : close < nz(stUpBand[1]) ? -1 : nz(stTrend[1], 1)
+
+stLine = stTrend == 1 ? stUpBand : stDnBand
+
+stBuySignal = stTrend == 1 and stTrend[1] == -1
+stSellSignal = stTrend == -1 and stTrend[1] == 1
+stLong = stTrend == 1
+stShort = stTrend == -1
+
+// Supertrend plots
+// (trend lines and clouds disabled)
+// stPlotUp = plot(stTrend == 1 ? stLine : na, "ST Up Trend", color=color.green, style=plot.style_linebr, linewidth=2)
+// stPlotDn = plot(stTrend == -1 ? stLine : na, "ST Down Trend", color=color.red, style=plot.style_linebr, linewidth=2)
+// midPlot = plot(ohlc4, display=display.none, editable=false)
+// fillUp = plot(stTrend == 1 and stHighlighter ? stLine : na, display=display.none, editable=false)
+// fillDn = plot(stTrend == -1 and stHighlighter ? stLine : na, display=display.none, editable=false)
+// fill(midPlot, fillUp, color=color.new(color.green, 90), title="ST Up Fill")
+// fill(midPlot, fillDn, color=color.new(color.red, 90), title="ST Down Fill")
+
+// Supertrend signals (small triangles - TEAL/ORANGE)
+plotshape(stShowSignals and stBuySignal ? stUpBand : na, "ST Buy", style=shape.triangleup, location=location.absolute, color=color.teal, size=size.tiny)
+plotshape(stShowSignals and stSellSignal ? stDnBand : na, "ST Sell", style=shape.triangledown, location=location.absolute, color=color.orange, size=size.tiny)
+// =========================================================================
+// 3) TWIN RANGE FILTER CALCULATION
+// =========================================================================
+fastAvgRange = ta.ema(ta.tr, trfFastPeriod) * trfFastRange
+slowAvgRange = ta.ema(ta.tr, trfSlowPeriod) * trfSlowRange
+avgRange = (fastAvgRange + slowAvgRange) / 2
+
+var float trfFilt = 0.0
+var int trfDir = 0
+
+trfFilt := trfSource > nz(trfFilt[1]) ?
+     (trfSource - avgRange < nz(trfFilt[1]) ? nz(trfFilt[1]) : trfSource - avgRange) :
+     (trfSource + avgRange > nz(trfFilt[1]) ? nz(trfFilt[1]) : trfSource + avgRange)
+
+trfUpward = ta.change(trfFilt) > 0 ? 1 : 0
+trfDownward = ta.change(trfFilt) < 0 ? 1 : 0
+
+trfDir := trfUpward[1] == 1 ? 1 : trfDownward[1] == 1 ? -1 : nz(trfDir[1])
+
+trfBuy = trfDir == 1 and trfDir[1] == -1
+trfSell = trfDir == -1 and trfDir[1] == 1
+trfLong = trfDir == 1
+trfShort = trfDir == -1
+
+// Twin Range plots
+// Twin Range signals (small arrow labels - LIME/FUCHSIA)
+plotshape(trfBuy, "TRF Buy", style=shape.labelup, location=location.belowbar, color=color.new(color.lime, 0), textcolor=color.white, text="▲", size=size.tiny)
+plotshape(trfSell, "TRF Sell", style=shape.labeldown, location=location.abovebar, color=color.new(color.fuchsia, 0), textcolor=color.white, text="▼", size=size.tiny)
+
+
+// =========================================================================
+// 4) COMBINED SIGNAL
+// =========================================================================
+longCount = (nrtrLong ? 1 : 0) + (stLong ? 1 : 0) + (trfLong ? 1 : 0)
+shortCount = (nrtrShort ? 1 : 0) + (stShort ? 1 : 0) + (trfShort ? 1 : 0)
+
+comboBuy = longCount == 3 and longCount[1] < 3
+comboSell = shortCount >= minConfirm and shortCount[1] < minConfirm
+
+// Combined signals (with text labels)
+plotshape(comboBuy, "COMBO BUY", style=shape.triangleup, location=location.belowbar, color=color.new(#00e676, 0), size=size.normal, text="COMBO BUY", textcolor=color.white)
+plotshape(comboSell, "COMBO SELL", style=shape.triangledown, location=location.abovebar, color=color.new(#ff1744, 0), size=size.normal, text="COMBO SELL", textcolor=color.white)
+
+// Alert conditions
+alertcondition(comboBuy, "Combo Long", "Triple Trend: LONG signal!")
+alertcondition(comboSell, "Combo Short", "Triple Trend: SHORT signal!")
+alertcondition(longCount == 3 and longCount[1] < 3, "3/3 Long", "Triple Trend: 3/3 STRONG LONG!")
+alertcondition(shortCount == 3 and shortCount[1] < 3, "3/3 Short", "Triple Trend: 3/3 STRONG SHORT!")
+
+
+// =========================================================================
+// 5) INFO PANEL
+// =========================================================================
+if showTable and barstate.islast
+    var table panel = table.new(position.bottom_right, 2, 6, bgcolor=color.new(color.black, 10), border_width=1, border_color=color.new(color.gray, 60))
+
+    table.cell(panel, 0, 0, "TRIPLE TREND", text_color=color.white, bgcolor=color.new(#1565c0, 20), text_size=size.small)
+    table.cell(panel, 1, 0, "STATE", text_color=color.white, bgcolor=color.new(#1565c0, 20), text_size=size.small)
+
+    table.cell(panel, 0, 1, "NRTR", text_color=color.white, text_halign=text.align_left, text_size=size.small)
+    table.cell(panel, 1, 1, nrtrLong ? "LONG" : "SHORT", bgcolor=nrtrLong ? color.new(color.green, 50) : color.new(color.red, 50), text_color=color.white, text_size=size.small)
+
+    table.cell(panel, 0, 2, "Supertrend", text_color=color.white, text_halign=text.align_left, text_size=size.small)
+    table.cell(panel, 1, 2, stLong ? "LONG" : "SHORT", bgcolor=stLong ? color.new(color.green, 50) : color.new(color.red, 50), text_color=color.white, text_size=size.small)
+
+    table.cell(panel, 0, 3, "Twin Range", text_color=color.white, text_halign=text.align_left, text_size=size.small)
+    table.cell(panel, 1, 3, trfLong ? "LONG" : "SHORT", bgcolor=trfLong ? color.new(color.green, 50) : color.new(color.red, 50), text_color=color.white, text_size=size.small)
+
+    table.cell(panel, 0, 4, "Confirmations", text_color=color.yellow, text_halign=text.align_left, text_size=size.small)
+    comboText = str.tostring(longCount) + "/3 Long | " + str.tostring(shortCount) + "/3 Short"
+    table.cell(panel, 1, 4, comboText, text_color=color.white, text_size=size.small)
+
+    table.cell(panel, 0, 5, "SIGNAL", text_color=color.yellow, text_halign=text.align_left, text_size=size.small)
+    sigText = longCount == 3 ? "STRONG LONG" : shortCount == 3 ? "STRONG SHORT" : longCount >= 2 ? "LONG" : shortCount >= 2 ? "SHORT" : "NEUTRAL"
+    sigBg = longCount == 3 ? color.new(color.green, 30) : shortCount == 3 ? color.new(color.red, 30) : longCount >= 2 ? color.new(color.green, 60) : shortCount >= 2 ? color.new(color.red, 60) : color.new(color.gray, 50)
+    table.cell(panel, 1, 5, sigText, bgcolor=sigBg, text_color=color.white, text_size=size.small)

@@ -1,0 +1,25 @@
+//@version=5
+indicator("basics/barstate")
+// Skip PineTS: barstate flags come from our full series, not the sliced run
+// barstate.* are per-bar booleans, and the flags behind them follow from where
+// a bar sits in the series rather than being set by hand.
+//
+// This runs on the last of the loaded bars, so it is the last bar and not the
+// first. Every bar of a completed series is closed history, and none of it is
+// real time.
+log.info(str.tostring(barstate.isfirst))
+log.info(str.tostring(barstate.islast))
+log.info(str.tostring(barstate.isnew))
+log.info(str.tostring(barstate.isconfirmed))
+log.info(str.tostring(barstate.ishistory))
+log.info(str.tostring(barstate.isrealtime))
+log.info(str.tostring(barstate.islastconfirmedhistory))
+
+// Expected output:
+// false
+// true
+// true
+// true
+// true
+// false
+// true

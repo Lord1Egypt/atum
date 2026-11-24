@@ -1,0 +1,202 @@
+//+------------------------------------------------------------------+
+//|                                Copyright (c) 2025 LogicCrafterDZ |
+//|                                  Email: logiccrafterdz@gmail.com |
+//|                                              Twitter: @Arana_lib |
+//|                          Telegram: `https://t.me/LogicCrafterDZ` |
+//+------------------------------------------------------------------+
+//@version=5
+indicator("Smart Scalp PA", overlay=true)
+
+Periods = input.int(10, title="ATR Period")
+src = input.source(hl2, title="Source")
+Multiplier = input.float(3.0, title="ATR Multiplier", step=0.1)
+changeATR = input.bool(true, title="Change ATR Calculation Method ?")
+showsignals = input.bool(true, title="Show Buy/Sell Signals ?")
+highlighting = input.bool(true, title="Highlighter On/Off ?")
+
+// Inputs moved earlier to ensure logic dependencies compile under v5
+boringThreshold = input.int(25, title="Boring Candle Threshold (%)", minval=1, maxval=100, step=1)
+engulfingThreshold = input.int(50, title="Engulfing Candle Threshold (%)", minval=1, maxval=100, step=1)
+stopLevel = input.int(200, title="Stop Level (Pips)", minval=1)
+
+// Boring Candle (Inside Bar) and Engulfing Candlestick Conditions
+isBoringCandle = math.abs(open[1] - close[1]) * 100 / math.abs(high[1] - low[1]) <= boringThreshold
+isEngulfingCandle = math.abs(open - close) * 100 / math.abs(high - low) <= engulfingThreshold
+
+trSeries = math.max(high - low, math.max(math.abs(high - close[1]), math.abs(low - close[1])))
+atr2 = ta.sma(trSeries, Periods)
+atr = changeATR ? ta.atr(Periods) : atr2
+
+up=src-(Multiplier*atr)
+up1 = nz(up[1],up)
+up := close[1] > up1 ? math.max(up,up1) : up
+dn=src+(Multiplier*atr)
+dn1 = nz(dn[1], dn)
+dn := close[1] < dn1 ? math.min(dn, dn1) : dn
+
+trend = 1
+trend := nz(trend[1], trend)
+trend := trend == -1 and close > dn1 ? 1 : trend == 1 and close < up1 ? -1 : trend
+
+// Define Downtrend and Uptrend conditions (moved earlier for dependency order)
+downtrend = trend == -1
+uptrend = trend == 1
+
+upPlot = plot(trend == 1 ? up : na, title="Up Trend", style=plot.style_linebr, linewidth=2, color=color.green)
+// === Trend Filter (HTF EMA 50 on H1) ===
+htfEma50 = request.security(syminfo.tickerid, "60", ta.ema(close, 50), lookahead=barmerge.lookahead_off)
+longTrendOK = close > htfEma50
+shortTrendOK = close < htfEma50
+
+// === S/R Proximity via Pivots (multi-touch levels with lookback) ===
+ph = ta.pivothigh(high, 5, 5)
+pl = ta.pivotlow(low, 5, 5)
+lastPH = ta.valuewhen(not na(ph), ph, 0)
+lastPL = ta.valuewhen(not na(pl), pl, 0)
+srDistPH = na(lastPH) ? 1e10 : math.abs(close - lastPH)
+srDistPL = na(lastPL) ? 1e10 : math.abs(close - lastPL)
+proximityPips = stopLevel
+// Build multi-touch S/R levels with arrays and require at least 2 touches
+var float[] srLevels = array.new_float()
+var int[] srCounts = array.new_int()
+var int[] srFirstTouch = array.new_int()
+var int[] srLastTouch = array.new_int()
+srTol = 5 * syminfo.mintick
+srLookback = 200
+if not na(ph)
+    matched = false
+    if array.size(srLevels) > 0
+        for i = 0 to array.size(srLevels) - 1
+            lvl = array.get(srLevels, i)
+            if math.abs(ph - lvl) <= srTol
+                matched := true
+                array.set(srCounts, i, array.get(srCounts, i) + 1)
+                array.set(srLastTouch, i, bar_index)
+                break
+    if not matched
+        array.push(srLevels, ph)
+        array.push(srCounts, 1)
+        array.push(srFirstTouch, bar_index)
+        array.push(srLastTouch, bar_index)
+if not na(pl)
+    matched2 = false
+    if array.size(srLevels) > 0
+        for i = 0 to array.size(srLevels) - 1
+            lvl2 = array.get(srLevels, i)
+            if math.abs(pl - lvl2) <= srTol
+                matched2 := true
+                array.set(srCounts, i, array.get(srCounts, i) + 1)
+                array.set(srLastTouch, i, bar_index)
+                break
+    if not matched2
+        array.push(srLevels, pl)
+        array.push(srCounts, 1)
+        array.push(srFirstTouch, bar_index)
+        array.push(srLastTouch, bar_index)
+// Cap arrays to avoid unbounded growth
+if array.size(srLevels) > 50
+    array.shift(srLevels)
+    array.shift(srCounts)
+    array.shift(srFirstTouch)
+    array.shift(srLastTouch)
+// Proximity check to a strong level (>=2 touches)
+hasStrongSR = false
+if array.size(srLevels) > 0
+    for i = 0 to array.size(srLevels) - 1
+        lvl3 = array.get(srLevels, i)
+        cnt3 = array.get(srCounts, i)
+        ltFirst = array.get(srFirstTouch, i)
+        ltLast = array.get(srLastTouch, i)
+        if cnt3 >= 2 and (ltLast - ltFirst) <= srLookback and math.abs(close - lvl3) <= srTol
+            hasStrongSR := true
+            break
+nearSR = hasStrongSR
+
+// === Pin Bar Detection (HTF EMA trend only) ===
+body = math.abs(close - open)
+candleRange = math.abs(high - low)
+upperWick = high - math.max(open, close)
+lowerWick = math.min(open, close) - low
+bullPinBar = longTrendOK and lowerWick > body * 2 and candleRange > 0 and (lowerWick / candleRange) >= 0.5 and close >= open
+bearPinBar = shortTrendOK and upperWick > body * 2 and candleRange > 0 and (upperWick / candleRange) >= 0.5 and close <= open
+
+// Map stopLevel to breakout/sl buffer pips (no new inputs)
+pip = syminfo.mintick
+breakoutPips = stopLevel
+slBufferPips = stopLevel
+slBufferPipsEff = math.min(slBufferPips, 10)
+
+// === Pattern Detection (Precise Engulfing) ===
+// Bullish Engulfing: current bullish body engulfs previous bearish body completely
+bullEngulfingCandle = (close > open) and (close[1] < open[1]) and (open <= close[1]) and (close >= open[1])
+// Bearish Engulfing: current bearish body engulfs previous bullish body completely
+bearEngulfingCandle = (close < open) and (close[1] > open[1]) and (open >= close[1]) and (close <= open[1])
+
+// === Setup Signals (Pin Bar OR Engulfing near S/R, in trend) ===
+bullishSetup = (bullPinBar or bullEngulfingCandle) and nearSR and longTrendOK
+bearishSetup = (bearPinBar or bearEngulfingCandle) and nearSR and shortTrendOK
+
+// Use existing names for visuals; repoint to setup signals
+bullEngulfing = bullishSetup
+bearEngulfing = bearishSetup
+
+// === Dynamic Mode: Signal every valid setup (no gating) ===
+changeCond = trend != trend[1]
+// Final signals use setup directly (no breakout/timeout logic)
+buySignal = bullishSetup
+plotshape(buySignal ? up : na, title="UpTrend Begins", location=location.absolute, style=shape.circle, size=size.tiny, color=color.green, transp=0)
+plotshape(buySignal and showsignals ? up : na, title="Buy", text="Buy", location=location.absolute, style=shape.labelup, size=size.tiny, color=color.green, textcolor=color.white, transp=0)
+dnPlot = plot(trend == 1 ? na : dn, title="Down Trend", style=plot.style_linebr, linewidth=2, color=color.red)
+sellSignal = bearishSetup
+plotshape(sellSignal ? dn : na, title="DownTrend Begins", location=location.absolute, style=shape.circle, size=size.tiny, color=color.red, transp=0)
+plotshape(sellSignal and showsignals ? dn : na, title="Sell", text="Sell", location=location.absolute, style=shape.labeldown, size=size.tiny, color=color.red, textcolor=color.white, transp=0)
+mPlot = plot(ohlc4, title="", style=plot.style_circles, linewidth=0)
+longFillColor = highlighting ? (trend == 1 ? color.green : color.white) : color.white
+shortFillColor = highlighting ? (trend == -1 ? color.red : color.white) : color.white
+fill(mPlot, upPlot, title="UpTrend Highligter", color=longFillColor)
+fill(mPlot, dnPlot, title="DownTrend Highligter", color=shortFillColor)
+// === Alerts (preserved messages) ===
+alertcondition(buySignal, title="SuperTrend Buy", message="SuperTrend Buy!")
+alertcondition(sellSignal, title="SuperTrend Sell", message="SuperTrend Sell!")
+alertcondition(changeCond, title="SuperTrend Direction Change", message="SuperTrend has changed direction!")
+
+// Engulfing 
+
+// === Risk/Reward: Entry, SL, TP (computed immediately) ===
+// Entry price = close; SL behind wick of current candle
+bullStop = close
+bearStop = close
+bullSL = low[1] - slBufferPipsEff * pip
+bearSL = high[1] + slBufferPipsEff * pip
+riskLong = bullStop - bullSL
+riskShort = bearSL - bearStop
+tp1_ratio = 1.0
+tp2_ratio = 2.0
+bullTP = bullStop + (riskLong * tp2_ratio)
+bearTP = bearStop - (riskShort * tp2_ratio)
+
+// Entry Conditions (signals only; no position simulation)
+enterLong = buySignal
+enterShort = sellSignal
+
+// No position tracking: remove entries and exits; signals and visuals only
+
+// Plot Shapes and Labels
+plotshape(bullEngulfing, style=shape.triangleup, location=location.abovebar, color=color.green)
+plotshape(bearEngulfing, style=shape.triangledown, location=location.abovebar, color=color.red)
+
+// Determine OP, SL, and TP
+plot(bullEngulfing ? bullStop : na, title="Bullish Engulfing stop", color=color.red, linewidth=3, style=plot.style_linebr)
+plot(bearEngulfing ? bearStop : na, title="Bearish Engulfing stop", color=color.red, linewidth=3, style=plot.style_linebr)
+plot(bullEngulfing ? bullSL : na, title="Bullish Engulfing SL", color=color.red, linewidth=3, style=plot.style_linebr)
+plot(bearEngulfing ? bearSL : na, title="Bearish Engulfing SL", color=color.red, linewidth=3, style=plot.style_linebr)
+plot(bullEngulfing ? bullTP : na, title="Bullish Engulfing TP", color=color.green, linewidth=3, style=plot.style_linebr)
+plot(bearEngulfing ? bearTP : na, title="Bearish Engulfing TP", color=color.green, linewidth=3, style=plot.style_linebr)
+
+// === Labels (positions preserved) ===
+label.new(bullEngulfing ? bar_index : na, bullSL, text="SL: " + str.tostring(bullSL), color=color.red, textcolor=color.white, style=label.style_label_up, size=size.tiny)
+label.new(bearEngulfing ? bar_index : na, bearSL, text="SL: " + str.tostring(bearSL), color=color.red, textcolor=color.white, style=label.style_label_down, size=size.tiny)
+label.new(bullEngulfing ? bar_index : na, bullTP, text="TP: " + str.tostring(bullTP), color=color.green, textcolor=color.white, style=label.style_label_down, size=size.tiny)
+label.new(bearEngulfing ? bar_index : na, bearTP, text="TP: " + str.tostring(bearTP), color=color.green, textcolor=color.white, style=label.style_label_up, size=size.tiny)
+
+// Gating fully disabled: no state flags updated

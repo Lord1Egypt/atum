@@ -1,0 +1,30 @@
+// Pine Script for and while loops: examples and limits
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/for-while-loops
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("How many bars since a higher high", overlay = false)
+
+maxBack = input.int(300, "Search at most N bars back", minval = 10, maxval = 2000)
+
+// for + break: walk back until a bar's high exceeds this bar's high
+int barsBack = na
+for i = 1 to maxBack
+    if high[i] > high
+        barsBack := i
+        break
+// The loop reads high up to 2000 bars back: keep that much history from the start
+max_bars_back(high, 2000)
+
+// while: count the closes in a row that were higher than the one before
+int streak = 0
+while streak < maxBack and close[streak] > close[streak + 1]
+    streak += 1
+
+// The same streak without a loop: a var counter updated once per bar
+var int streakVar = 0
+streakVar := close > close[1] ? streakVar + 1 : 0
+
+plot(nz(barsBack, maxBack), "Bars since a higher high", na(barsBack) ? color.orange : color.gray, style = plot.style_columns)
+plot(streak, "Higher closes in a row (while)", color.teal)
+plot(streakVar, "Higher closes in a row (var)", color.blue, display = display.data_window)

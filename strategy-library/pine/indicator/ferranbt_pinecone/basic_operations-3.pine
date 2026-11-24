@@ -1,0 +1,14 @@
+//@version=5
+indicator("box/basic_operations")
+// Test box basic operations
+b = box.new(0, 100.0, 10, 50.0)
+log.info(str.tostring(box.get_left(b)))
+log.info(str.tostring(box.get_top(b)))
+log.info(str.tostring(box.get_right(b)))
+log.info(str.tostring(box.get_bottom(b)))
+
+// Expected output:
+// 0
+// 100
+// 10
+// 50

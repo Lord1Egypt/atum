@@ -1,0 +1,12 @@
+//@version=6
+indicator("basics/date_values")
+// Each date name is a value for the current bar; the last bar has time 199000ms
+// → 1970-01-01 00:03:19 UTC.
+log.info(str.tostring(year) + "|" + str.tostring(month) + "|" + str.tostring(dayofmonth))
+log.info(str.tostring(hour) + "|" + str.tostring(minute) + "|" + str.tostring(second))
+log.info(str.tostring(weekofyear) + "|" + str.tostring(time))
+
+// Expected output:
+// 1970|1|1
+// 0|3|19
+// 1|199000

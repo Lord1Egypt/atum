@@ -1,0 +1,344 @@
+//@version=6
+// ============================================================================
+// Vein Accumulation Phase 4H [WavesUnchained]
+// Version: 0.2.0
+// Author: WavesUnchained
+// Build: 2026-11-17
+// ============================================================================
+// Shows whether the market is in an accumulation or distribution phase: a
+// sideways range that forms after a decline (accumulation) or after a rally
+// (distribution). Not a point signal — a process state over time.
+//
+// Phase rule (symmetric):
+//   Accumulation = prior trend down AND EMA20/50 flat AND ranging (ER low)
+//   Distribution = prior trend up   AND EMA20/50 flat AND ranging (ER low)
+//   The condition must hold for Min Phase Duration bars in a row; then the
+//   range is latched. The phase ends when a close leaves the latched range
+//   (up or down) — that is also the invalidation.
+//
+// Features:
+//   ✓ Phase state: none → forming → Accumulation / Distribution → range exit
+//   ✓ Raw conditions shown on/off: prior trend, EMA flat, ranging, compression
+//   ✓ Sweep / spring / upthrust counts within the lookback
+//   ✓ Bars since bull / bear BOS, swing structure (HL / LL / LH / HH)
+//   ✓ Latched phase range drawn on the chart
+//   ✓ Alerts on phase changes only
+//
+// Data Contract:
+//   Price:     REQUIRED   chart symbol
+//   Volume:    NO
+//   OI:        NO
+//   Reference: NO
+//   Verdict:   CFD-safe
+//
+// ============================================================================
+indicator("Vein: Accumulation Phase 4H [WavesUnchained]", "Vein Accum", overlay=true, max_labels_count=50)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+var gCore = "Core Parameters"
+int   atrLen       = input.int(14, "ATR Length", minval=1, group=gCore)
+int   lookback     = input.int(20, "Phase Lookback Bars", minval=10, group=gCore, tooltip="Window for the prior-trend reference, efficiency ratio, range bounds and the sweep / spring counts.")
+int   minPhaseBars = input.int(10, "Min Phase Duration", minval=3, group=gCore, tooltip="Bars in a row the phase condition must hold before the phase is set and its range latched.\nFilters out V-reversals.")
+
+var gSwing = "Swing Detection"
+int   pivotLeft  = input.int(3, "Pivot Left Bars", minval=1, group=gSwing)
+int   pivotRight = input.int(3, "Pivot Right Bars", minval=1, group=gSwing)
+
+var gThresh = "Thresholds"
+float erRangeThresh     = input.float(0.3, "Efficiency Ratio Range Threshold", minval=0.05, step=0.05, group=gThresh, tooltip="Below this = ranging. Above = trending.")
+float bbwCompressThresh = input.float(0.7, "BB Width Compression Ratio", minval=0.3, step=0.1, group=gThresh, tooltip="Current BBW / avg BBW. Below = compressed. Shown as info, not part of the phase rule.")
+float atrCompressThresh = input.float(0.8, "ATR Compression Ratio", minval=0.3, step=0.1, group=gThresh, tooltip="Current ATR / avg ATR. Below = compressed. Shown as info, not part of the phase rule.")
+
+var gDisplay = "Display"
+bool   showBgShading  = input.bool(true, "Background Shading", group=gDisplay)
+bool   showPhaseRange = input.bool(true, "Show Phase Range", group=gDisplay, tooltip="Latched high / low of the active phase.")
+bool   showTable      = input.bool(true, "Show Status Table", group=gDisplay)
+bool   showPhaseLabel = input.bool(true, "Show Phase Label on Chart", group=gDisplay)
+
+// ============================================================================
+// CALCULATIONS — Base indicators
+// ============================================================================
+
+float atr14      = ta.atr(atrLen)
+float atrAvg     = ta.sma(atr14, lookback)
+float atrRatio   = atrAvg > 0 ? atr14 / atrAvg : 1.0
+
+float ema20      = ta.ema(close, 20)
+float ema50      = ta.ema(close, 50)
+
+// Bollinger
+float bbBasis = ta.sma(close, 20)
+float bbDev   = ta.stdev(close, 20)
+float bbWidth = bbBasis > 0 ? (2 * bbDev * 2.0) / bbBasis : 0.0
+float bbwAvg  = ta.sma(bbWidth, lookback)
+float bbwRatio = bbwAvg > 0 ? bbWidth / bbwAvg : 1.0
+
+// Efficiency Ratio: net move / total path
+float netMove   = math.abs(close - close[lookback])
+float totalPath = math.sum(math.abs(close - close[1]), lookback)
+float effRatio  = totalPath > 0 ? netMove / totalPath : 1.0
+
+// Range bounds
+float rangeHigh = ta.highest(high, lookback)
+float rangeLow  = ta.lowest(low, lookback)
+float rangeWidth = atr14 > 0 ? (rangeHigh - rangeLow) / atr14 : 0.0
+
+// ============================================================================
+// CALCULATIONS — Swing detection
+// ============================================================================
+
+float pivHigh = ta.pivothigh(high, pivotLeft, pivotRight)
+float pivLow  = ta.pivotlow(low, pivotLeft, pivotRight)
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var float prevSwingHigh = na
+var float prevSwingLow  = na
+
+if not na(pivHigh)
+    prevSwingHigh := lastSwingHigh
+    lastSwingHigh := pivHigh
+
+if not na(pivLow)
+    prevSwingLow := lastSwingLow
+    lastSwingLow := pivLow
+
+// ============================================================================
+// CALCULATIONS — Structure events
+// ============================================================================
+
+// BOS detection
+bool bullBOS = not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bool bearBOS = not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+
+// Sweeps (wick beyond the last swing) and springs / upthrusts (wick beyond, close back inside)
+bool isSweepLow  = not na(lastSwingLow) and low < lastSwingLow
+bool isSpring    = not na(lastSwingLow) and low < lastSwingLow and close > lastSwingLow
+bool isSweepHigh = not na(lastSwingHigh) and high > lastSwingHigh
+bool isUpthrust  = not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh
+
+// Swing sequence
+bool hasHigherLow  = not na(lastSwingLow) and not na(prevSwingLow) and lastSwingLow > prevSwingLow
+bool hasLowerLow   = not na(lastSwingLow) and not na(prevSwingLow) and lastSwingLow < prevSwingLow
+bool hasLowerHigh  = not na(lastSwingHigh) and not na(prevSwingHigh) and lastSwingHigh < prevSwingHigh
+bool hasHigherHigh = not na(lastSwingHigh) and not na(prevSwingHigh) and lastSwingHigh > prevSwingHigh
+
+// Event counts within the lookback — first bar of each sweep/spring, not every bar the condition persists
+int sweepLowCount  = int(math.sum(isSweepLow and not isSweepLow[1] ? 1 : 0, lookback))
+int springCount    = int(math.sum(isSpring and not isSpring[1] ? 1 : 0, lookback))
+int sweepHighCount = int(math.sum(isSweepHigh and not isSweepHigh[1] ? 1 : 0, lookback))
+int upthrustCount  = int(math.sum(isUpthrust and not isUpthrust[1] ? 1 : 0, lookback))
+
+int barsSinceBullBOS = ta.barssince(bullBOS)
+int barsSinceBearBOS = ta.barssince(bearBOS)
+
+// ============================================================================
+// PHASE CONDITIONS — raw facts
+// ============================================================================
+
+bool priorDown    = ema20[lookback] < ema50[lookback]
+bool priorUp      = ema20[lookback] > ema50[lookback]
+float emaGapATR   = atr14 > 0 ? math.abs(ema20 - ema50) / atr14 : na
+bool emaFlat      = not na(emaGapATR) and emaGapATR < 0.5
+bool isRanging    = effRatio < erRangeThresh
+bool isCompressed = bbwRatio < bbwCompressThresh or atrRatio < atrCompressThresh
+
+bool accCond  = priorDown and emaFlat and isRanging
+bool distCond = priorUp and emaFlat and isRanging
+
+// ============================================================================
+// PHASE STATE MACHINE
+// ============================================================================
+// phase:  2 = Accumulation, -2 = Distribution, 1 / -1 = forming, 0 = none
+// Entry:  side condition holds minPhaseBars in a row → range latched
+// Exit:   close above the latched high or below the latched low (either side)
+
+var int   phase         = 0
+var int   condSide      = 0
+var int   condRun       = 0
+var int   phaseStartBar = na
+var float phaseHigh     = na
+var float phaseLow      = na
+var int   lastExitDir   = 0
+var int   lastExitPhase = 0
+var int   lastExitBar   = na
+
+int  prevPhase = phase
+bool exitUp    = false
+bool exitDown  = false
+
+if math.abs(phase) == 2
+    if close > phaseHigh
+        exitUp := true
+    else if close < phaseLow
+        exitDown := true
+    if exitUp or exitDown
+        lastExitDir   := exitUp ? 1 : -1
+        lastExitPhase := phase
+        lastExitBar   := bar_index
+        phase         := 0
+        condSide      := 0
+        condRun       := 0
+        phaseStartBar := na
+        phaseHigh     := na
+        phaseLow      := na
+else
+    // Symmetric: a side counts only when the other side's condition is off
+    int side = 0
+    if accCond and not distCond
+        side := 1
+    else if distCond and not accCond
+        side := -1
+    if side != 0 and side == condSide
+        condRun += 1
+    else if side != 0
+        condSide      := side
+        condRun       := 1
+        phaseStartBar := bar_index
+    else
+        condSide      := 0
+        condRun       := 0
+        phaseStartBar := na
+    if condSide != 0 and condRun >= minPhaseBars
+        phase     := 2 * condSide
+        phaseHigh := rangeHigh
+        phaseLow  := rangeLow
+    else
+        phase := condSide
+
+int phaseDuration = not na(phaseStartBar) ? bar_index - phaseStartBar + 1 : 0
+
+bool becameAccum = phase == 2 and prevPhase != 2
+bool becameDist  = phase == -2 and prevPhase != -2
+
+string phaseStr = phase == 2 ? "ACCUMULATION" : phase == -2 ? "DISTRIBUTION" : phase == 1 ? "ACCUM forming" : phase == -1 ? "DISTRIB forming" : "NONE"
+
+// ============================================================================
+// VISUALIZATION — Background shading and phase range
+// ============================================================================
+
+color phaseCol = phase == 2 ? #00c853 : phase == -2 ? #d50000 : color.gray
+
+bgcolor(showBgShading and phase != 0 ? color.new(phaseCol, math.abs(phase) == 2 ? 90 : 94) : na)
+
+plot(showPhaseRange and math.abs(phase) == 2 ? phaseHigh : na, "Phase Range High", color=color.new(phaseCol, 30), style=plot.style_linebr, linewidth=1)
+plot(showPhaseRange and math.abs(phase) == 2 ? phaseLow : na, "Phase Range Low", color=color.new(phaseCol, 30), style=plot.style_linebr, linewidth=1)
+
+// ============================================================================
+// VISUALIZATION — Phase label on chart
+// ============================================================================
+
+f_onOff(bool b) =>
+    b ? "yes" : "no"
+
+f_barsStr(int n) =>
+    na(n) ? "—" : str.tostring(n)
+
+var label phaseLabel = na
+
+if showPhaseLabel and barstate.islast
+    label.delete(phaseLabel)
+    phaseLabel := na
+    if phase != 0
+        bool isAccSide = phase > 0
+        string lblText = phaseStr + " · " + str.tostring(phaseDuration) + " bars"
+        string tip = phaseStr + "\n────────────────\nDuration: " + str.tostring(phaseDuration) + " bars (min " + str.tostring(minPhaseBars) + ")\nPrior trend: " + (priorDown ? "down" : priorUp ? "up" : "flat") + "\nEMA20/50 flat: " + f_onOff(emaFlat) + "\nRanging (ER " + str.tostring(effRatio, "#.00") + "): " + f_onOff(isRanging) + "\nCompressed: " + f_onOff(isCompressed) + "\nRange width: " + str.tostring(rangeWidth, "#.1") + " ATR\n\nSweeps ↓ / springs: " + str.tostring(sweepLowCount) + " / " + str.tostring(springCount) + "\nSweeps ↑ / upthrusts: " + str.tostring(sweepHighCount) + " / " + str.tostring(upthrustCount) + "\nBars since bull / bear BOS: " + f_barsStr(barsSinceBullBOS) + " / " + f_barsStr(barsSinceBearBOS)
+        phaseLabel := label.new(bar_index + 3, isAccSide ? rangeLow - atr14 * 0.5 : rangeHigh + atr14 * 0.5, lblText, style=isAccSide ? label.style_label_up : label.style_label_down, color=color.new(phaseCol, 80), textcolor=phaseCol, size=size.normal, tooltip=tip)
+
+// ============================================================================
+// VISUALIZATION — Status table
+// ============================================================================
+
+color tc = color.new(color.gray, 20)   // standard text color (dark gray)
+color hd = color.new(color.gray, 90)   // header row background (very light gray)
+color offBg = color.new(color.gray, 80)
+
+// Created once (var) — re-creating the table on every realtime tick would stack table objects.
+var table statusTbl = table.new(position.top_right, 3, 10, bgcolor=color.new(color.white, 5), border_color=color.new(color.gray, 60), border_width=1, frame_color=color.new(color.gray, 40), frame_width=1)
+
+f_flagCell(table t, int col, int row, string txt, bool on) =>
+    table.cell(t, col, row, txt, text_color=on ? color.white : tc, bgcolor=on ? color.new(#ff6f00, 20) : offBg, text_size=size.small)
+
+if showTable and barstate.islast
+    color phaseBg = phase != 0 ? color.new(phaseCol, math.abs(phase) == 2 ? 10 : 40) : offBg
+    color phaseTc = phase != 0 ? color.white : tc
+
+    // Row 0: Header
+    table.cell(statusTbl, 0, 0, "Vein Accum", text_color=tc, bgcolor=hd, text_size=size.small, tooltip="Accumulation / Distribution phase\n────────────────\nAccumulation = prior trend down + EMA20/50 flat + ranging\nDistribution = prior trend up + EMA20/50 flat + ranging\nHeld for Min Phase Duration bars → range latched.\nA close outside the latched range ends the phase.")
+    table.cell(statusTbl, 1, 0, "", text_color=tc, bgcolor=hd, text_size=size.small)
+    table.cell(statusTbl, 2, 0, "v0.2", text_color=tc, bgcolor=hd, text_size=size.small, text_halign=text.align_right)
+
+    // Row 1: Phase + duration
+    table.cell(statusTbl, 0, 1, "Phase", text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 1, 1, phaseStr, text_color=phaseTc, bgcolor=phaseBg, text_size=size.small)
+    table.cell(statusTbl, 2, 1, phase != 0 ? str.tostring(phaseDuration) + " / " + str.tostring(minPhaseBars) + " bars" : "—", text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    // Row 2: Prior trend
+    table.cell(statusTbl, 0, 2, "Prior trend", text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 1, 2, priorDown ? "down" : priorUp ? "up" : "flat", text_color=priorDown ? #d50000 : priorUp ? #00c853 : tc, text_size=size.small)
+    table.cell(statusTbl, 2, 2, str.tostring(lookback) + " bars ago", text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    // Row 3-5: Phase conditions
+    table.cell(statusTbl, 0, 3, "EMA20/50 flat", text_color=tc, text_size=size.small)
+    f_flagCell(statusTbl, 1, 3, f_onOff(emaFlat), emaFlat)
+    table.cell(statusTbl, 2, 3, na(emaGapATR) ? "—" : str.tostring(emaGapATR, "#.00") + " ATR gap", text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(statusTbl, 0, 4, "Ranging", text_color=tc, text_size=size.small)
+    f_flagCell(statusTbl, 1, 4, f_onOff(isRanging), isRanging)
+    table.cell(statusTbl, 2, 4, "ER " + str.tostring(effRatio, "#.00") + " · " + str.tostring(rangeWidth, "#.0") + " ATR", text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(statusTbl, 0, 5, "Compressed", text_color=tc, text_size=size.small)
+    f_flagCell(statusTbl, 1, 5, f_onOff(isCompressed), isCompressed)
+    table.cell(statusTbl, 2, 5, "BBW " + str.tostring(bbwRatio, "#.00") + " · ATR " + str.tostring(atrRatio, "#.00"), text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    // Row 6-7: Liquidity events within the lookback
+    table.cell(statusTbl, 0, 6, "Sweeps ↓ / Spr", text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 1, 6, str.tostring(sweepLowCount) + " / " + str.tostring(springCount), text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 2, 6, "last " + str.tostring(lookback) + " bars", text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    table.cell(statusTbl, 0, 7, "Sweeps ↑ / UT", text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 1, 7, str.tostring(sweepHighCount) + " / " + str.tostring(upthrustCount), text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 2, 7, "last " + str.tostring(lookback) + " bars", text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    // Row 8: Structure
+    table.cell(statusTbl, 0, 8, "BOS ↑ / ↓ ago", text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 1, 8, f_barsStr(barsSinceBullBOS) + " / " + f_barsStr(barsSinceBearBOS), text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 2, 8, "HL " + (hasHigherLow ? "✓" : "·") + " LL " + (hasLowerLow ? "✓" : "·") + " LH " + (hasLowerHigh ? "✓" : "·") + " HH " + (hasHigherHigh ? "✓" : "·"), text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+    // Row 9: Last range exit
+    string exitStr = lastExitDir == 0 ? "—" : (lastExitPhase == 2 ? "ACCUM" : "DISTRIB") + " exit " + (lastExitDir == 1 ? "up" : "down")
+    table.cell(statusTbl, 0, 9, "Last exit", text_color=tc, text_size=size.small)
+    table.cell(statusTbl, 1, 9, exitStr, text_color=lastExitDir == 1 ? #00c853 : lastExitDir == -1 ? #d50000 : tc, text_size=size.small)
+    table.cell(statusTbl, 2, 9, na(lastExitBar) ? "" : str.tostring(bar_index - lastExitBar) + " bars ago", text_color=tc, text_size=size.small, text_halign=text.align_right)
+
+// ============================================================================
+// DATA WINDOW
+// ============================================================================
+
+plot(phase, "Phase (2=acc, -2=dist, ±1=forming) [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(phaseDuration, "Phase Duration [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(emaFlat ? 1 : 0, "EMA Flat [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(isRanging ? 1 : 0, "Ranging [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(isCompressed ? 1 : 0, "Compressed [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(effRatio, "Efficiency Ratio [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(bbwRatio, "BBW Ratio [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(atrRatio, "ATR Ratio [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(sweepLowCount, "Sweeps Low [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(springCount, "Springs [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(sweepHighCount, "Sweeps High [dw]", display=display.data_window, color=color.new(color.gray, 100))
+plot(upthrustCount, "Upthrusts [dw]", display=display.data_window, color=color.new(color.gray, 100))
+
+// ============================================================================
+// ALERTS — phase changes only
+// ============================================================================
+
+bool alertsOnBarClose = input.bool(true, "Alerts only on bar close (confirmed)", group="Alerts")
+bool alertOk = not alertsOnBarClose or barstate.isconfirmed
+
+alertcondition(alertOk and becameAccum, "Phase Changed to Accumulation", "VEIN-ACC · PHASE CHANGED TO ACCUMULATION · {{ticker}} {{interval}}")
+alertcondition(alertOk and becameDist, "Phase Changed to Distribution", "VEIN-ACC · PHASE CHANGED TO DISTRIBUTION · {{ticker}} {{interval}}")
+alertcondition(alertOk and exitUp, "Phase Ended — Close Above Range", "VEIN-ACC · PHASE ENDED · CLOSE ABOVE PHASE RANGE · {{ticker}} {{interval}}")
+alertcondition(alertOk and exitDown, "Phase Ended — Close Below Range", "VEIN-ACC · PHASE ENDED · CLOSE BELOW PHASE RANGE · {{ticker}} {{interval}}")

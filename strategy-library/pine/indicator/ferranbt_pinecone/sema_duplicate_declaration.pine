@@ -1,0 +1,7 @@
+//@version=5
+indicator("variables/sema_duplicate_declaration")
+x = 1
+x = 2
+
+// Expected error:
+// error [duplicate-declaration] 4:1: `x` is already declared in this scope (use `:=` to reassign)

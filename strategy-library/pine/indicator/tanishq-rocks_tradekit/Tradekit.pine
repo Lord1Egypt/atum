@@ -1,0 +1,751 @@
+//@version=6
+indicator("TradeKit", shorttitle="TradeKit", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+// Version 2.1.0
+
+//==================================================
+// FEATURES
+//==================================================
+groupFeatures = "Features"
+
+enableMA1       = input.bool(true,  "Enable MA 1", group=groupFeatures)
+enableMA2       = input.bool(true,  "Enable MA 2", group=groupFeatures)
+enableMA3       = input.bool(false,  "Enable MA 3", group=groupFeatures)
+enableMA4       = input.bool(true,  "Enable MA 4", group=groupFeatures)
+enableVWAP      = input.bool(false, "Enable VWAP", group=groupFeatures)
+enableInsideBar = input.bool(false,  "Enable Inside Bar", group=groupFeatures)
+enableOutsideBar = input.bool(false,  "Enable Outside Bar", group=groupFeatures)
+enableConfirmationBar = input.bool(false, "Enable C2C Bar", group=groupFeatures)
+enableBB = input.bool(false, "Enable Bollinger Bands", group=groupFeatures)
+enableDHL = input.bool(false, "Enable Daily High/Low", group=groupFeatures)
+enablePDHL      = input.bool(false,  "Enable Previous Day High/Low", group=groupFeatures)
+enablePWHL      = input.bool(false, "Enable Previous Week High/Low", group=groupFeatures)
+enablePMHL      = input.bool(false, "Enable Previous Month High/Low", group=groupFeatures)
+enableTimeRange = input.bool(false, "Enable Time Range Box", group=groupFeatures)
+enableSessions = input.bool(false, "Enable Sessions", group=groupFeatures)
+enableDashboard = input.bool(false, "Show Dashboard", group=groupFeatures)
+
+//==================================================
+// SOURCE
+//==================================================
+src = input.source(close, "EMA Source")
+
+//==================================================
+// SHARED FUNCTIONS
+//==================================================
+// MA Function
+ma(source, length, _type) =>
+    switch _type
+        "SMA"         => ta.sma(source, length)
+        "EMA"         => ta.ema(source, length)
+        "SMMA (RMA)"  => ta.rma(source, length)
+        "WMA"         => ta.wma(source, length)
+        "VWMA"        => ta.vwma(source, length)
+
+//==================================================
+// MA 1
+//==================================================
+groupMA1 = "MA 1"
+
+len1   = input.int(9, "Length", minval=1, group=groupMA1)
+type1  = input.string("EMA", "Type", options=["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group=groupMA1)
+color1 = input.color(color.blue, "Color", group=groupMA1)
+
+//==================================================
+// MA 2
+//==================================================
+groupMA2 = "MA 2"
+
+len2   = input.int(15, "Length", minval=1, group=groupMA2)
+type2  = input.string("EMA", "Type", options=["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group=groupMA2)
+color2 = input.color(color.aqua, "Color", group=groupMA2)
+
+//==================================================
+// MA 3
+//==================================================
+groupMA3 = "MA 3"
+
+len3   = input.int(50, "Length", minval=1, group=groupMA3)
+type3  = input.string("EMA", "Type", options=["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group=groupMA3)
+color3 = input.color(color.green, "Color", group=groupMA3)
+
+//==================================================
+// MA 4
+//==================================================
+groupMA4 = "MA 4"
+
+len4   = input.int(200, "Length", minval=1, group=groupMA4)
+type4  = input.string("EMA", "Type", options=["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group=groupMA4)
+color4 = input.color(color.red, "Color", group=groupMA4)
+
+//==================================================
+// MA CALCULATIONS
+//==================================================
+ma1 = ma(src, len1, type1)
+ma2 = ma(src, len2, type2)
+ma3 = ma(src, len3, type3)
+ma4 = ma(src, len4, type4)
+
+//==================================================
+// MA PLOTS
+//==================================================
+plot(enableMA1 ? ma1 : na, title="MA 1", color=color1, linewidth=1)
+plot(enableMA2 ? ma2 : na, title="MA 2", color=color2, linewidth=1)
+plot(enableMA3 ? ma3 : na, title="MA 3", color=color3, linewidth=1)
+plot(enableMA4 ? ma4 : na, title="MA 4", color=color4, linewidth=1)
+
+//==================================================
+// MA CROSSOVER ALERTS
+//==================================================
+alertcondition(enableMA1 and enableMA2 and (ta.crossover(ma1, ma2) or ta.crossunder(ma1, ma2)), title="MA 1 / MA 2 Cross", message="MA 1 crossed MA 2")
+
+alertcondition(enableMA2 and enableMA3 and (ta.crossover(ma2, ma3) or ta.crossunder(ma2, ma3)), title="MA 2 / MA 3 Cross", message="MA 2 crossed MA 3")
+
+alertcondition(enableMA3 and enableMA4 and (ta.crossover(ma3, ma4) or ta.crossunder(ma3, ma4)), title="MA 3 / MA 4 Cross", message="MA 3 crossed MA 4")
+
+//==================================================
+// INSIDE BAR SETTINGS
+//==================================================
+groupIB = "Inside Bar"
+
+insideColor = input.color(color.white, "Inside Bar Color", group=groupIB)
+showIBLabel = input.bool(false, "Show IB Label", group=groupIB)
+
+//==================================================
+// INSIDE BAR LOGIC
+//==================================================
+insideBar = enableInsideBar and barstate.isconfirmed and high < high[1] and low > low[1]
+
+// Color candle
+barcolor(insideBar ? insideColor : na)
+
+// Label
+plotshape(showIBLabel and insideBar, title="Inside Bar", style=shape.triangleup, location=location.belowbar, color=insideColor, size=size.tiny, text="IB")
+
+//==================================================
+// ALERT
+//==================================================
+alertcondition(enableInsideBar and insideBar, title="Inside Bar", message="Inside Bar detected")
+
+//==================================================
+// OUTSIDE BAR SETTINGS
+//==================================================
+groupOB = "Outside Bar"
+
+outsideColor = input.color(color.fuchsia, "Outside Bar Color", group=groupOB)
+showOBLabel = input.bool(false, "Show OB Label", group=groupOB)
+
+//==================================================
+// OUTSIDE BAR LOGIC
+//==================================================
+outsideBar = enableOutsideBar and barstate.isconfirmed and high > high[1] and low < low[1]
+
+// Color candle
+barcolor(outsideBar ? outsideColor : na)
+
+// Label
+plotshape(showOBLabel and outsideBar, title="Outside Bar", style=shape.triangledown, location=location.abovebar, color=outsideColor, size=size.tiny, text="OB")
+
+//==================================================
+// ALERT
+//==================================================
+alertcondition(enableOutsideBar and outsideBar, title="Outside Bar", message="Outside Bar detected")
+
+//==================================================
+// C2C BAR SETTINGS
+//==================================================
+groupConfirmation = "C2C Bar"
+
+confirmBullColor = input.color(color.blue, "Bullish Color", group=groupConfirmation)
+confirmBearColor = input.color(color.black, "Bearish Color", group=groupConfirmation)
+
+//==================================================
+// C2C BAR LOGIC
+//==================================================
+// An inside bar (contained within the prior bar's range) whose close
+// continues in the direction of the prior bar: prior bar green and
+// this bar's close above the prior close, or prior bar red and this
+// bar's close below the prior close.
+prevGreen = close[1] > open[1]
+prevRed   = close[1] < open[1]
+isInsider = barstate.isconfirmed and high < high[1] and low > low[1]
+
+confirmBullish = enableConfirmationBar and isInsider and prevGreen and close[1] < close
+confirmBearish = enableConfirmationBar and isInsider and prevRed and close[1] > close
+
+// Color candle
+barcolor(confirmBullish ? confirmBullColor : confirmBearish ? confirmBearColor : na)
+
+//==================================================
+// BOLLINGER BANDS
+//==================================================
+// Adapted from TradingView's built-in Bollinger Bands indicator (open-source, Mozilla Public License 2.0).
+groupBB = "Bollinger Bands"
+
+TT_LENGTH  = "The time period to be used in calculating the MA which creates the base for the Upper and Lower Bands."
+TT_MA_TYPE = "Determines the type of Moving Average that is applied to the basis plot line."
+TT_SOURCE  = "Determines what data from each bar will be used in calculations."
+TT_MULT    = "The number of Standard Deviations away from the MA that the Upper and Lower Bands should be."
+
+bbLength = input.int(20, "Length", minval=1, tooltip=TT_LENGTH, group=groupBB)
+bbMAType = input.string("EMA", "Basis MA Type", options=["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], tooltip=TT_MA_TYPE, group=groupBB)
+
+bbSrc = input.source(close, "Source", tooltip=TT_SOURCE, group=groupBB)
+
+bbMult = input.float(2.0, "StdDev", minval=0.001, maxval=50, tooltip=TT_MULT, group=groupBB)
+
+bbOffset = input.int(0, "Offset", minval=-500, maxval=500, display=display.none, group=groupBB)
+
+// BB Calculation
+basis = ma(bbSrc, bbLength, bbMAType)
+dev = bbMult * ta.stdev(bbSrc, bbLength)
+upper = basis + dev
+lower = basis - dev
+
+// BB Plots
+pBasis = plot(enableBB ? basis : na, "BB Basis", color=#2962FF, offset=bbOffset)
+pUpper = plot(enableBB ? upper : na, "BB Upper", color=#F23645, offset=bbOffset)
+pLower = plot(enableBB ? lower : na, "BB Lower", color=#089981, offset=bbOffset)
+
+fill(pUpper, pLower, title="BB Fill", color=enableBB ? color.rgb(33,150,243,95) : na)
+
+//==================================================
+// BB ALERTS
+//==================================================
+alertcondition(enableBB and ta.crossover(close, upper), title="BB Upper Cross", message="Price crossed above the Bollinger Band")
+
+alertcondition(enableBB and ta.crossunder(close, lower), title="BB Lower Cross", message="Price crossed below the Bollinger Band")
+
+//==================================================
+// SETTINGS
+//==================================================
+groupDHL = "Daily High / Low"
+
+highColor = input.color(color.lime, "High Color", group=groupDHL)
+lowColor  = input.color(color.red, "Low Color", group=groupDHL)
+
+lineWidth = input.int(2, "Line Width", minval=1, maxval=5, group=groupDHL)
+
+lineStyleInput = input.string("Dotted", "Line Style", options = ["Solid", "Dashed", "Dotted"], group = groupDHL)
+
+//==================================================
+// LINE STYLE
+//==================================================
+lineStyle = lineStyleInput == "Solid" ? line.style_solid : lineStyleInput == "Dashed" ? line.style_dashed : line.style_dotted
+
+//==================================================
+// VARIABLES
+//==================================================
+newDay = timeframe.change("D")
+
+var float dayHigh = na
+var float dayLow = na
+var int dayStart = na
+
+var line highLine = na
+var line lowLine = na
+
+var line[] highLines = array.new_line()
+var line[] lowLines = array.new_line()
+
+//==================================================
+// DRAW DAILY HIGH / LOW
+//==================================================
+if enableDHL
+
+    if newDay
+
+        // Finish previous day's lines
+        if not na(highLine)
+            line.set_xy2(highLine, bar_index - 1, dayHigh)
+
+        if not na(lowLine)
+            line.set_xy2(lowLine, bar_index - 1, dayLow)
+
+        // Start new day
+        dayHigh := high
+        dayLow := low
+        dayStart := bar_index
+
+        highLine := line.new(dayStart, dayHigh, dayStart, dayHigh, color = highColor, width = lineWidth, style = lineStyle)
+
+        lowLine := line.new(dayStart, dayLow, dayStart, dayLow, color = lowColor, width = lineWidth, style = lineStyle)
+
+        array.push(highLines, highLine)
+        array.push(lowLines, lowLine)
+
+    else
+
+        dayHigh := math.max(dayHigh, high)
+        dayLow := math.min(dayLow, low)
+
+        line.set_xy1(highLine, dayStart, dayHigh)
+        line.set_xy2(highLine, bar_index, dayHigh)
+
+        line.set_xy1(lowLine, dayStart, dayLow)
+        line.set_xy2(lowLine, bar_index, dayLow)
+
+//==================================================
+// PREVIOUS DAY HIGH / LOW SETTINGS
+//==================================================
+groupPDHL = "Previous Day High/Low"
+
+pdHighColor      = input.color(color.orange, "High Color", group=groupPDHL)
+pdLowColor       = input.color(color.orange, "Low Color", group=groupPDHL)
+pdLineWidth      = input.int(1, "Line Width", minval=1, maxval=5, group=groupPDHL)
+pdLineStyleInput = input.string("Dashed", "Line Style", options = ["Solid", "Dashed", "Dotted"], group = groupPDHL)
+
+pdLineStyle = pdLineStyleInput == "Solid" ? line.style_solid : pdLineStyleInput == "Dashed" ? line.style_dashed : line.style_dotted
+
+//==================================================
+// PREVIOUS DAY HIGH / LOW LOGIC
+//==================================================
+var line pdHighLine = na
+var line pdLowLine = na
+
+pdHigh = float(na)
+pdLow = float(na)
+
+if enablePDHL
+    [pdHighSec, pdLowSec] = request.security(syminfo.tickerid, "D", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+    pdHigh := pdHighSec
+    pdLow := pdLowSec
+
+    if newDay
+
+        if not na(pdHigh)
+            pdHighLine := line.new(bar_index, pdHigh, bar_index, pdHigh, color=pdHighColor, width=pdLineWidth, style=pdLineStyle)
+        else
+            pdHighLine := na
+
+        if not na(pdLow)
+            pdLowLine := line.new(bar_index, pdLow, bar_index, pdLow, color=pdLowColor, width=pdLineWidth, style=pdLineStyle)
+        else
+            pdLowLine := na
+
+    else
+
+        if not na(pdHighLine) and not na(pdHigh)
+            line.set_xy2(pdHighLine, bar_index, pdHigh)
+
+        if not na(pdLowLine) and not na(pdLow)
+            line.set_xy2(pdLowLine, bar_index, pdLow)
+
+//==================================================
+// PREVIOUS DAY HIGH / LOW ALERTS
+//==================================================
+alertcondition(enablePDHL and not na(pdHigh) and ta.crossover(close, pdHigh), title="Previous Day High Break", message="Price broke above the previous day's high")
+
+alertcondition(enablePDHL and not na(pdLow) and ta.crossunder(close, pdLow), title="Previous Day Low Break", message="Price broke below the previous day's low")
+
+//==================================================
+// PREVIOUS WEEK HIGH / LOW SETTINGS
+//==================================================
+groupPWHL = "Previous Week High/Low"
+
+pwHighColor      = input.color(color.purple, "High Color", group=groupPWHL)
+pwLowColor       = input.color(color.purple, "Low Color", group=groupPWHL)
+pwLineWidth      = input.int(1, "Line Width", minval=1, maxval=5, group=groupPWHL)
+pwLineStyleInput = input.string("Dashed", "Line Style", options = ["Solid", "Dashed", "Dotted"], group = groupPWHL)
+
+pwLineStyle = pwLineStyleInput == "Solid" ? line.style_solid : pwLineStyleInput == "Dashed" ? line.style_dashed : line.style_dotted
+
+//==================================================
+// PREVIOUS WEEK HIGH / LOW LOGIC
+//==================================================
+var line pwHighLine = na
+var line pwLowLine = na
+
+pwHigh = float(na)
+pwLow = float(na)
+
+if enablePWHL
+    newWeek = timeframe.change("W")
+    [pwHighSec, pwLowSec] = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+    pwHigh := pwHighSec
+    pwLow := pwLowSec
+
+    if newWeek
+
+        if not na(pwHigh)
+            pwHighLine := line.new(bar_index, pwHigh, bar_index, pwHigh, color=pwHighColor, width=pwLineWidth, style=pwLineStyle)
+        else
+            pwHighLine := na
+
+        if not na(pwLow)
+            pwLowLine := line.new(bar_index, pwLow, bar_index, pwLow, color=pwLowColor, width=pwLineWidth, style=pwLineStyle)
+        else
+            pwLowLine := na
+
+    else
+
+        if not na(pwHighLine) and not na(pwHigh)
+            line.set_xy2(pwHighLine, bar_index, pwHigh)
+
+        if not na(pwLowLine) and not na(pwLow)
+            line.set_xy2(pwLowLine, bar_index, pwLow)
+
+//==================================================
+// PREVIOUS MONTH HIGH / LOW SETTINGS
+//==================================================
+groupPMHL = "Previous Month High/Low"
+
+pmHighColor      = input.color(color.teal, "High Color", group=groupPMHL)
+pmLowColor       = input.color(color.teal, "Low Color", group=groupPMHL)
+pmLineWidth      = input.int(1, "Line Width", minval=1, maxval=5, group=groupPMHL)
+pmLineStyleInput = input.string("Dashed", "Line Style", options = ["Solid", "Dashed", "Dotted"], group = groupPMHL)
+
+pmLineStyle = pmLineStyleInput == "Solid" ? line.style_solid : pmLineStyleInput == "Dashed" ? line.style_dashed : line.style_dotted
+
+//==================================================
+// PREVIOUS MONTH HIGH / LOW LOGIC
+//==================================================
+var line pmHighLine = na
+var line pmLowLine = na
+
+pmHigh = float(na)
+pmLow = float(na)
+
+if enablePMHL
+    newMonth = timeframe.change("M")
+    [pmHighSec, pmLowSec] = request.security(syminfo.tickerid, "M", [high[1], low[1]], lookahead=barmerge.lookahead_on)
+    pmHigh := pmHighSec
+    pmLow := pmLowSec
+
+    if newMonth
+
+        if not na(pmHigh)
+            pmHighLine := line.new(bar_index, pmHigh, bar_index, pmHigh, color=pmHighColor, width=pmLineWidth, style=pmLineStyle)
+        else
+            pmHighLine := na
+
+        if not na(pmLow)
+            pmLowLine := line.new(bar_index, pmLow, bar_index, pmLow, color=pmLowColor, width=pmLineWidth, style=pmLineStyle)
+        else
+            pmLowLine := na
+
+    else
+
+        if not na(pmHighLine) and not na(pmHigh)
+            line.set_xy2(pmHighLine, bar_index, pmHigh)
+
+        if not na(pmLowLine) and not na(pmLow)
+            line.set_xy2(pmLowLine, bar_index, pmLow)
+
+//==================================================
+// VWAP
+//==================================================
+groupVWAP = "VWAP"
+
+vwapColor     = input.color(color.yellow, "VWAP Color", group=groupVWAP)
+vwapShowBands = input.bool(false, "Show Bands", group=groupVWAP)
+vwapBandsMult = input.float(2.0, "Bands StdDev", minval=0.001, maxval=50, group=groupVWAP)
+
+// VWAP Calculation
+vwapValue = float(na)
+vwapUpper = float(na)
+vwapLower = float(na)
+
+if enableVWAP
+    [vwapValueSec, vwapUpperSec, vwapLowerSec] = ta.vwap(hlc3, newDay, vwapBandsMult)
+    vwapValue := vwapValueSec
+    vwapUpper := vwapUpperSec
+    vwapLower := vwapLowerSec
+
+// VWAP Plots
+plot(enableVWAP ? vwapValue : na, title="VWAP", color=vwapColor, linewidth=2)
+
+pVWAPUpper = plot(enableVWAP and vwapShowBands ? vwapUpper : na, title="VWAP Upper Band", color=vwapColor)
+pVWAPLower = plot(enableVWAP and vwapShowBands ? vwapLower : na, title="VWAP Lower Band", color=vwapColor)
+
+fill(pVWAPUpper, pVWAPLower, title="VWAP Band Fill", color=enableVWAP and vwapShowBands ? color.new(vwapColor, 90) : na)
+
+//==================================================
+// SESSIONS
+//==================================================
+// Adapted from TradingView's built-in Sessions indicator (open-source, Mozilla Public License 2.0).
+groupSessions = "Sessions"
+
+showSessionNames     = input.bool(true, "Show session names", group=groupSessions)
+showSessionOC        = input.bool(true, "Draw session open and close lines", group=groupSessions)
+showSessionTickRange = input.bool(false, "Show tick range for each session", group=groupSessions)
+showSessionAverage   = input.bool(false, "Show average price per session", group=groupSessions)
+showAllNotes         = input.bool(false, "Show Notes for Each Session", group=groupSessions, tooltip="Master switch for the per-session \"Show Notes\" checkboxes below. Turning this off hides every session's notes regardless of their own individual setting.")
+
+TT_TIMEZONE = "The session's time zone, specified in either GMT notation (e.g., 'GMT-5') or as an IANA time zone database name (e.g., 'America/New_York'). We recommend the latter since it includes other time-related changes, such as daylight savings. Each session's time and on-chart label always use this timezone, which may differ from your chart's display timezone -- the on-chart label shows it explicitly so it's never ambiguous."
+
+groupSessionTokyo = "Tokyo Session"
+showSessionTokyo = input.bool(true, "Show session", group=groupSessionTokyo)
+sesTokyoName  = input.string("Tokyo", "Displayed name", group=groupSessionTokyo)
+sesTokyoTime  = input.session("0900-1800", "Session time", group=groupSessionTokyo)
+sesTokyoTZ    = input.string("Asia/Tokyo", "Session timezone", group=groupSessionTokyo, tooltip=TT_TIMEZONE)
+sesTokyoColor = input.color(color.new(#2962FF, 85), "Session color", group=groupSessionTokyo)
+showNotesTokyo = input.bool(true, "Show Notes", group=groupSessionTokyo)
+sesTokyoNotes = input.text_area("Majors: JPY, AUD, NZD\nKillzone (Asian): 06:30-10:30 IST (05:30-09:30 IST during US DST, ~Mar-Nov)", "Notes", group=groupSessionTokyo, active=showNotesTokyo, tooltip="Freeform notes for this session, e.g. which symbols you want to trade. Supports multiple lines. Shown on the session's on-chart label.")
+
+groupSessionLondon = "London Session"
+showSessionLondon = input.bool(true, "Show session", group=groupSessionLondon)
+sesLondonName  = input.string("London", "Displayed name", group=groupSessionLondon)
+sesLondonTime  = input.session("0800-1700", "Session time", group=groupSessionLondon)
+sesLondonTZ    = input.string("Europe/London", "Session timezone", group=groupSessionLondon, tooltip=TT_TIMEZONE)
+sesLondonColor = input.color(color.new(#FF9800, 85), "Session color", group=groupSessionLondon)
+showNotesLondon = input.bool(true, "Show Notes", group=groupSessionLondon)
+sesLondonNotes = input.text_area("Majors: EUR, GBP, CHF\nKillzone (London): 12:30-15:30 IST (11:30-14:30 IST during US DST, ~Mar-Nov)", "Notes", group=groupSessionLondon, active=showNotesLondon, tooltip="Freeform notes for this session, e.g. which symbols you want to trade. Supports multiple lines. Shown on the session's on-chart label.")
+
+groupSessionNY = "New York Session"
+showSessionNY = input.bool(true, "Show session", group=groupSessionNY)
+sesNYName  = input.string("New York", "Displayed name", group=groupSessionNY)
+sesNYTime  = input.session("0800-1700", "Session time", group=groupSessionNY)
+sesNYTZ    = input.string("America/New_York", "Session timezone", group=groupSessionNY, tooltip=TT_TIMEZONE)
+sesNYColor = input.color(color.new(#089981, 85), "Session color", group=groupSessionNY)
+showNotesNY = input.bool(true, "Show Notes", group=groupSessionNY)
+sesNYNotes = input.text_area("Majors: USD, CAD\nKillzone (New York): 17:30-20:30 IST (16:30-19:30 IST during US DST, ~Mar-Nov)", "Notes", group=groupSessionNY, active=showNotesNY, tooltip="Freeform notes for this session, e.g. which symbols you want to trade. Supports multiple lines. Shown on the session's on-chart label.")
+
+type SessionDisplay
+    box   sessionBox
+    label sessionLabel
+    line  openLine
+    line  avgLine
+    line  closeLine
+    float sumClose
+    int   numOfBars
+
+type SessionInfo
+    color  color
+    string name
+    string session
+    string timezone
+    string notes
+    SessionDisplay active = na
+
+method setName(SessionDisplay this, string name, string tz, string notes) =>
+    sessionLabel = this.sessionLabel
+    sessionBox = this.sessionBox
+    boxText = array.new<string>()
+    if showSessionTickRange
+        boxText.push("Range: " + str.tostring((sessionBox.get_top() - sessionBox.get_bottom()) / syminfo.mintick, format.mintick))
+    if showSessionAverage
+        boxText.push("Avg: " + str.tostring(this.sumClose / this.numOfBars, format.mintick))
+    if showSessionNames
+        boxText.push(name + " (" + tz + ")")
+    if notes != ""
+        boxText.push(notes)
+    sessionLabel.set_y(sessionBox.get_bottom())
+    sessionLabel.set_text(array.join(boxText, "\n"))
+
+method createSessionDisplay(SessionInfo this) =>
+    boxColor = this.color
+    opaqueColor = color.new(boxColor, 0)
+    dis = SessionDisplay.new(sessionBox = box.new(bar_index, high, bar_index, low, bgcolor = boxColor, border_color = na), sessionLabel = label.new(bar_index, low, "", style = label.style_label_upper_left, textalign = text.align_left, textcolor = opaqueColor, color = color(na)), openLine = showSessionOC ? line.new(bar_index, open, bar_index, open, color = opaqueColor, style = line.style_dashed, width = 1) : na, closeLine = showSessionOC ? line.new(bar_index, close, bar_index, close, color = opaqueColor, style = line.style_dashed, width = 1) : na, avgLine = showSessionAverage ? line.new(bar_index, close, bar_index, close, style = line.style_dotted, width = 2, color = opaqueColor) : na, sumClose = close, numOfBars = 1)
+    if showSessionOC
+        linefill.new(dis.openLine, dis.closeLine, boxColor)
+    dis.setName(this.name, this.timezone, this.notes)
+    this.active := dis
+
+method updateSessionDisplay(SessionInfo this) =>
+    sessionDisp = this.active
+    sessionBox = sessionDisp.sessionBox
+    openLine = sessionDisp.openLine
+    closeLine = sessionDisp.closeLine
+    avgLine = sessionDisp.avgLine
+    sessionDisp.sumClose += close
+    sessionDisp.numOfBars += 1
+
+    sessionBox.set_top(math.max(sessionBox.get_top(), high))
+    sessionBox.set_bottom(math.min(sessionBox.get_bottom(), low))
+    sessionBox.set_right(bar_index)
+    sessionDisp.setName(this.name, this.timezone, this.notes)
+
+    if showSessionOC
+        openLine.set_x2(bar_index)
+        closeLine.set_x2(bar_index)
+        closeLine.set_y1(close)
+        closeLine.set_y2(close)
+
+    if showSessionAverage
+        avgLine.set_x2(bar_index)
+        avg = sessionDisp.sumClose / sessionDisp.numOfBars
+        avgLine.set_y1(avg)
+        avgLine.set_y2(avg)
+    sessionDisp
+
+method update(SessionInfo this) =>
+    bool isChange = timeframe.change("1D")
+    if (not na(time("", this.session, this.timezone)))
+        if na(this.active) or isChange
+            this.createSessionDisplay()
+        else
+            this.updateSessionDisplay()
+    else if not na(this.active)
+        this.active := na
+
+getSessionInfos() =>
+    array<SessionInfo> infos = array.new<SessionInfo>()
+    if showSessionTokyo
+        infos.push(SessionInfo.new(color = sesTokyoColor, name = sesTokyoName, session = sesTokyoTime, timezone = sesTokyoTZ, notes = showAllNotes and showNotesTokyo ? sesTokyoNotes : ""))
+    if showSessionLondon
+        infos.push(SessionInfo.new(color = sesLondonColor, name = sesLondonName, session = sesLondonTime, timezone = sesLondonTZ, notes = showAllNotes and showNotesLondon ? sesLondonNotes : ""))
+    if showSessionNY
+        infos.push(SessionInfo.new(color = sesNYColor, name = sesNYName, session = sesNYTime, timezone = sesNYTZ, notes = showAllNotes and showNotesNY ? sesNYNotes : ""))
+    infos
+
+var array<SessionInfo> sessionInfos = getSessionInfos()
+
+// Sessions only make sense on intraday timeframes; silently skip on D/W/M
+// rather than erroring out the whole indicator.
+if enableSessions and not timeframe.isdwm
+    for info in sessionInfos
+        info.update()
+
+//==================================================
+// TIME RANGE BOX SETTINGS
+//==================================================
+groupTimeRange = "Time Range Box"
+
+trTimeframe     = input.timeframe("60", "Timeframe", group=groupTimeRange, tooltip="The higher timeframe to box. Only draws when this is actually higher than your chart's own timeframe -- e.g. pick 60 (1H) while viewing a 1min or 5min chart.")
+trKeepAll       = input.bool(false, "Keep All Periods (don't remove older boxes)", group=groupTimeRange, tooltip="When on, every period's box stays on the chart forever instead of being trimmed to \"Periods to Keep\". Still subject to TradingView's own 500-object drawing limit, shared across all of TradeKit's box/line features.")
+trPeriodsToKeep = input.int(5, "Periods to Keep", minval=1, group=groupTimeRange, active=not trKeepAll, tooltip="How many completed period boxes to keep on the chart. Older ones are removed as new periods form.")
+trColorA        = input.color(color.gray, "Period Color A", group=groupTimeRange)
+trColorB        = input.color(#FF69B4, "Period Color B", group=groupTimeRange)
+trShowLabel     = input.bool(true, "Show Label", group=groupTimeRange)
+trLabelPosition = input.string("Top Left", "Label Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group=groupTimeRange)
+trLabelSize     = input.int(10, "Label Font Size", minval=1, group=groupTimeRange)
+
+//==================================================
+// TIME RANGE BOX LOGIC
+//==================================================
+type TRPeriodBoxes
+    box upperWick
+    box body
+    box lowerWick
+    label lbl
+
+trOpen = float(na)
+trHigh = float(na)
+trLow = float(na)
+trClose = float(na)
+
+var int trPeriodIndex = 0
+var int trPeriodStart = na
+
+trNewPeriod = timeframe.change(trTimeframe)
+if trNewPeriod
+    trPeriodIndex := trPeriodIndex + 1
+    trPeriodStart := bar_index
+trIsSlotA = trPeriodIndex % 2 == 0
+trHigherThanChart = timeframe.in_seconds(trTimeframe) > timeframe.in_seconds(timeframe.period)
+
+trIsLabelTop  = trLabelPosition == "Top Left" or trLabelPosition == "Top Right"
+trIsLabelLeft = trLabelPosition == "Top Left" or trLabelPosition == "Bottom Left"
+// A style's anchor is that corner of the bubble; the bubble extends in the
+// opposite direction on both axes. We want it to extend away from the box
+// vertically (outside), but toward the box's own span horizontally (not
+// bleeding into the neighboring period) -- e.g. Top Left anchors at the
+// period's own left edge and should extend up-and-right into its own
+// period, which is style_label_lower_left (anchor = bubble's lower-left
+// corner, so the bubble itself sits up-and-right of it).
+trLabelStyle  = trLabelPosition == "Top Left" ? label.style_label_lower_left : trLabelPosition == "Top Right" ? label.style_label_lower_right : trLabelPosition == "Bottom Left" ? label.style_label_upper_left : label.style_label_upper_right
+
+var array<TRPeriodBoxes> trBoxGroups = array.new<TRPeriodBoxes>()
+var TRPeriodBoxes trCurrent = na
+
+if enableTimeRange
+    [trOpenSec, trHighSec, trLowSec, trCloseSec] = request.security(syminfo.tickerid, trTimeframe, [open, high, low, close])
+    trOpen := trOpenSec
+    trHigh := trHighSec
+    trLow := trLowSec
+    trClose := trCloseSec
+
+    if trHigherThanChart
+        slotColor = trIsSlotA ? trColorA : trColorB
+        bodyTop = math.max(trOpen, trClose)
+        bodyBottom = math.min(trOpen, trClose)
+        labelX = trIsLabelLeft ? trPeriodStart : bar_index
+        labelY = trIsLabelTop ? trHigh : trLow
+        labelText = "O" + str.tostring(trOpen, format.mintick) + " H" + str.tostring(trHigh, format.mintick) + " L" + str.tostring(trLow, format.mintick) + " C" + str.tostring(trClose, format.mintick)
+
+        if trNewPeriod
+            newLabel = trShowLabel ? label.new(labelX, labelY, labelText, style=trLabelStyle, textcolor=color.new(slotColor, 0), color=color(na), size=trLabelSize) : na
+            trCurrent := TRPeriodBoxes.new(upperWick = box.new(bar_index, trHigh, bar_index, bodyTop, bgcolor=color.new(slotColor, 85), border_color=na), body = box.new(bar_index, bodyTop, bar_index, bodyBottom, bgcolor=color.new(slotColor, 60), border_color=na), lowerWick = box.new(bar_index, bodyBottom, bar_index, trLow, bgcolor=color.new(slotColor, 85), border_color=na), lbl = newLabel)
+            array.push(trBoxGroups, trCurrent)
+            if not trKeepAll and array.size(trBoxGroups) > trPeriodsToKeep
+                oldGroup = array.shift(trBoxGroups)
+                box.delete(oldGroup.upperWick)
+                box.delete(oldGroup.body)
+                box.delete(oldGroup.lowerWick)
+                label.delete(oldGroup.lbl)
+        else
+            if not na(trCurrent)
+                box.set_top(trCurrent.upperWick, trHigh)
+                box.set_bottom(trCurrent.upperWick, bodyTop)
+                box.set_right(trCurrent.upperWick, bar_index)
+
+                box.set_top(trCurrent.body, bodyTop)
+                box.set_bottom(trCurrent.body, bodyBottom)
+                box.set_right(trCurrent.body, bar_index)
+
+                box.set_top(trCurrent.lowerWick, bodyBottom)
+                box.set_bottom(trCurrent.lowerWick, trLow)
+                box.set_right(trCurrent.lowerWick, bar_index)
+
+                if trShowLabel and not na(trCurrent.lbl)
+                    label.set_x(trCurrent.lbl, labelX)
+                    label.set_y(trCurrent.lbl, labelY)
+                    label.set_text(trCurrent.lbl, labelText)
+
+// Full-height background tint, alternating per period
+bgcolor(enableTimeRange and trHigherThanChart ? color.new(trIsSlotA ? trColorA : trColorB, 92) : na)
+
+//==================================================
+// DASHBOARD SETTINGS
+//==================================================
+groupDashboard = "Dashboard"
+
+tablePositionInput = input.string("Top Right", "Position", options=["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group=groupDashboard)
+
+dashTextColor = input.color(color.white, "Text Color", group=groupDashboard)
+dashBgColor   = input.color(color.new(color.black, 20), "Background Color", group=groupDashboard)
+
+tablePosition = tablePositionInput == "Top Left" ? position.top_left : tablePositionInput == "Top Right" ? position.top_right : tablePositionInput == "Bottom Left" ? position.bottom_left : position.bottom_right
+
+//==================================================
+// DASHBOARD
+//==================================================
+var table dashboard = table.new(tablePosition, 2, 7, border_width=1)
+
+if enableDashboard and barstate.islast
+    row = 0
+
+    if enableMA1
+        table.cell(dashboard, 0, row, "MA 1", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_left)
+        table.cell(dashboard, 1, row, close > ma1 ? "Above" : "Below", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_right)
+        row := row + 1
+
+    if enableMA2
+        table.cell(dashboard, 0, row, "MA 2", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_left)
+        table.cell(dashboard, 1, row, close > ma2 ? "Above" : "Below", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_right)
+        row := row + 1
+
+    if enableMA3
+        table.cell(dashboard, 0, row, "MA 3", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_left)
+        table.cell(dashboard, 1, row, close > ma3 ? "Above" : "Below", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_right)
+        row := row + 1
+
+    if enableMA4
+        table.cell(dashboard, 0, row, "MA 4", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_left)
+        table.cell(dashboard, 1, row, close > ma4 ? "Above" : "Below", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_right)
+        row := row + 1
+
+    if enableBB
+        bbPosition = close > upper ? "Above Upper" : close < lower ? "Below Lower" : "Inside"
+        table.cell(dashboard, 0, row, "BB Position", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_left)
+        table.cell(dashboard, 1, row, bbPosition, text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_right)
+        row := row + 1
+
+    if enablePDHL
+        table.cell(dashboard, 0, row, "Dist. PD High", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_left)
+        table.cell(dashboard, 1, row, na(pdHigh) ? "n/a" : str.tostring(close - pdHigh, format.mintick), text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_right)
+        row := row + 1
+
+        table.cell(dashboard, 0, row, "Dist. PD Low", text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_left)
+        table.cell(dashboard, 1, row, na(pdLow) ? "n/a" : str.tostring(close - pdLow, format.mintick), text_color=dashTextColor, bgcolor=dashBgColor, text_halign=text.align_right)
+        row := row + 1

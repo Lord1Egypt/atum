@@ -1,0 +1,75 @@
+//@version=5
+indicator("operators/comparison")
+// Test comparison operators
+
+// Greater than
+gt1 = 10 > 5
+gt2 = 3 > 7
+gt3 = 5 > 5
+
+// Less than
+lt1 = 3 < 7
+lt2 = 10 < 5
+lt3 = 5 < 5
+
+// Greater than or equal
+gte1 = 10 >= 5
+gte2 = 5 >= 5
+gte3 = 3 >= 7
+
+// Less than or equal
+lte1 = 3 <= 7
+lte2 = 5 <= 5
+lte3 = 10 <= 5
+
+// Equal
+eq1 = 5 == 5
+eq2 = 5 == 3
+eq3 = true == true
+eq4 = false == false
+
+// Not equal
+ne1 = 5 != 3
+ne2 = 5 != 5
+ne3 = true != false
+
+log.info(str.tostring(gt1))
+log.info(str.tostring(gt2))
+log.info(str.tostring(gt3))
+log.info(str.tostring(lt1))
+log.info(str.tostring(lt2))
+log.info(str.tostring(lt3))
+log.info(str.tostring(gte1))
+log.info(str.tostring(gte2))
+log.info(str.tostring(gte3))
+log.info(str.tostring(lte1))
+log.info(str.tostring(lte2))
+log.info(str.tostring(lte3))
+log.info(str.tostring(eq1))
+log.info(str.tostring(eq2))
+log.info(str.tostring(eq3))
+log.info(str.tostring(eq4))
+log.info(str.tostring(ne1))
+log.info(str.tostring(ne2))
+log.info(str.tostring(ne3))
+
+// Expected output:
+// true
+// false
+// false
+// true
+// false
+// false
+// true
+// true
+// false
+// true
+// true
+// false
+// true
+// false
+// true
+// true
+// true
+// false
+// true

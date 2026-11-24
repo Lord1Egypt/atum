@@ -1,0 +1,29 @@
+//@version=5
+indicator("types/method_call")
+// Test method calls on UDT
+
+type InfoLabel
+    int x = 0
+    int y = 0
+
+// Define method for the type
+method set(InfoLabel this, int newX, int newY) =>
+    this.x := newX
+    this.y := newY
+
+// Create instance
+label = InfoLabel.new()
+
+// Call method to modify fields
+label.set(100, 200)
+
+// Access modified values
+finalX = label.x
+finalY = label.y
+
+log.info(str.tostring(finalX))
+log.info(str.tostring(finalY))
+
+// Expected output:
+// 100
+// 200

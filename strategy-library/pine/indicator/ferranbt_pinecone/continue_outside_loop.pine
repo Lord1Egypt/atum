@@ -1,0 +1,9 @@
+//@version=5
+indicator("errors/continue_outside_loop")
+// Test continue outside loop - should fail
+
+var x = 10
+continue
+
+// Expected error:
+// error [break-outside-loop] 6:1: `continue` is only valid inside a loop

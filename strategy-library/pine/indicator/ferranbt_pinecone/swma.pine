@@ -1,0 +1,17 @@
+//@version=5
+indicator("ta/swma")
+// Test ta.swma (Symmetrically Weighted Moving Average)
+// A fixed 4-bar window weighted 1, 2, 2, 1 from newest to oldest.
+// Over the last 4 bars close is 298, 299, 300, 301.
+
+// Bars: 4
+
+// (301 + 2*300 + 2*299 + 298) / 6 = 1797 / 6
+swmaClose = ta.swma(close)
+log.info(str.tostring(swmaClose))
+
+// Expected output:
+// NaN
+// NaN
+// NaN
+// 299.5

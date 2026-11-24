@@ -1,0 +1,37 @@
+//@version=5
+indicator("Price Action Setup (Pin Bar & Engulfing) - V1", overlay=true)
+
+// === INPUTS ===
+ema21 = ta.ema(close, 21)
+ema8 = ta.ema(close, 8)
+useEMA = input.bool(true, "Use EMAs for Trend Filter?", group="Trend")
+showEMAs = input.bool(true, "Show 21 & 8 EMAs?", group="Display")
+
+// === FUNCTIONS ===
+// Trend direction
+bullTrend = useEMA ? (close > ema21 and close > ema8) : true
+bearTrend = useEMA ? (close < ema21 and close < ema8) : true
+
+// Pin bar detection
+isBullPin = close > open and (high - close) > 2 * (close - open) and (open - low) < (close - open)
+isBearPin = close < open and (close - low) > 2 * (open - close) and (high - open) < (open - close)
+
+// Engulfing detection
+isBullEngulf = close[1] < open[1] and close > open and close > open[1] and open < close[1]
+isBearEngulf = close[1] > open[1] and close < open and close < open[1] and open > close[1]
+
+// Entry conditions
+bullSignal = (isBullPin or isBullEngulf) and bullTrend
+bearSignal = (isBearPin or isBearEngulf) and bearTrend
+
+// === PLOT SIGNALS ===
+plotshape(bullSignal, title="Buy Signal", location=location.belowbar, color=color.green, style=shape.labelup, text="BUY")
+plotshape(bearSignal, title="Sell Signal", location=location.abovebar, color=color.red, style=shape.labeldown, text="SELL")
+
+// === SHOW EMAs ===
+plot(showEMAs ? ema21 : na, title="EMA 21", color=color.orange)
+plot(showEMAs ? ema8 : na, title="EMA 8", color=color.blue)
+
+// === ALERTS ===
+alertcondition(bullSignal, title="Bullish Setup", message="BUY setup: Bullish pin bar or engulfing")
+alertcondition(bearSignal, title="Bearish Setup", message="SELL setup: Bearish pin bar or engulfing")

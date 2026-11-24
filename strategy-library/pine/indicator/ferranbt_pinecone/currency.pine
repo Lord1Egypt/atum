@@ -1,0 +1,117 @@
+//@version=5
+indicator("builtins/currency")
+// Test currency constants
+log.info(str.tostring(currency.AED))
+log.info(str.tostring(currency.ARS))
+log.info(str.tostring(currency.AUD))
+log.info(str.tostring(currency.BDT))
+log.info(str.tostring(currency.BHD))
+log.info(str.tostring(currency.BRL))
+log.info(str.tostring(currency.BTC))
+log.info(str.tostring(currency.CAD))
+log.info(str.tostring(currency.CHF))
+log.info(str.tostring(currency.CLP))
+log.info(str.tostring(currency.CNY))
+log.info(str.tostring(currency.COP))
+log.info(str.tostring(currency.CZK))
+log.info(str.tostring(currency.DKK))
+log.info(str.tostring(currency.EGP))
+log.info(str.tostring(currency.ETH))
+log.info(str.tostring(currency.EUR))
+log.info(str.tostring(currency.GBP))
+log.info(str.tostring(currency.HKD))
+log.info(str.tostring(currency.HUF))
+log.info(str.tostring(currency.IDR))
+log.info(str.tostring(currency.ILS))
+log.info(str.tostring(currency.INR))
+log.info(str.tostring(currency.ISK))
+log.info(str.tostring(currency.JPY))
+log.info(str.tostring(currency.KES))
+log.info(str.tostring(currency.KRW))
+log.info(str.tostring(currency.KWD))
+log.info(str.tostring(currency.LKR))
+log.info(str.tostring(currency.MAD))
+log.info(str.tostring(currency.MXN))
+log.info(str.tostring(currency.MYR))
+log.info(str.tostring(currency.NGN))
+log.info(str.tostring(currency.NOK))
+log.info(str.tostring(currency.NONE))
+log.info(str.tostring(currency.NZD))
+log.info(str.tostring(currency.PEN))
+log.info(str.tostring(currency.PHP))
+log.info(str.tostring(currency.PKR))
+log.info(str.tostring(currency.PLN))
+log.info(str.tostring(currency.QAR))
+log.info(str.tostring(currency.RON))
+log.info(str.tostring(currency.RSD))
+log.info(str.tostring(currency.RUB))
+log.info(str.tostring(currency.SAR))
+log.info(str.tostring(currency.SEK))
+log.info(str.tostring(currency.SGD))
+log.info(str.tostring(currency.THB))
+log.info(str.tostring(currency.TND))
+log.info(str.tostring(currency.TRY))
+log.info(str.tostring(currency.TWD))
+log.info(str.tostring(currency.USD))
+log.info(str.tostring(currency.USDT))
+log.info(str.tostring(currency.VES))
+log.info(str.tostring(currency.VND))
+log.info(str.tostring(currency.ZAR))
+
+// Expected output:
+// AED
+// ARS
+// AUD
+// BDT
+// BHD
+// BRL
+// BTC
+// CAD
+// CHF
+// CLP
+// CNY
+// COP
+// CZK
+// DKK
+// EGP
+// ETH
+// EUR
+// GBP
+// HKD
+// HUF
+// IDR
+// ILS
+// INR
+// ISK
+// JPY
+// KES
+// KRW
+// KWD
+// LKR
+// MAD
+// MXN
+// MYR
+// NGN
+// NOK
+// NONE
+// NZD
+// PEN
+// PHP
+// PKR
+// PLN
+// QAR
+// RON
+// RSD
+// RUB
+// SAR
+// SEK
+// SGD
+// THB
+// TND
+// TRY
+// TWD
+// USD
+// USDT
+// VES
+// VND
+// ZAR

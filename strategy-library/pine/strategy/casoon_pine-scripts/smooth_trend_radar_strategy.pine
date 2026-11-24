@@ -1,0 +1,851 @@
+//@version=6
+// ============================================================================
+// Smooth Trend Radar [WavesUnchained] — Strategy (standalone)
+// Version: 3.4.7
+// Author: WavesUnchained
+// Build: 2026-11-17
+// ============================================================================
+// Double-smoothed Supertrend baseline for trend direction, with live baseline
+// rejection signals at the baseline, statistical overextension highlighting,
+// and automatic SL/TP level visualization on flips.
+//
+// Features:
+//   ✓ Supertrend midline double-smoothed with WMA + EMA — fewer whipsaws
+//   ✓ Auto Timeframe Scaling — parameters self-adjust per chart timeframe
+//   ✓ Optional volatility-adaptive band width — normalizes factor across instruments
+//   ✓ Trend direction from ATR-scaled baseline slope with hysteresis — filters micro-noise flips
+//   ✓ Baseline rejection with slope filter, touch validation,
+//       optional bar-polarity filter (Body or Pressure), and optional volume filter
+//   ✓ Rejections fire in both regimes, tagged Trend Pullback / Range Rejection
+//   ✓ Three SL methods: Flip Candle / Baseline ± ATR / Swing Structure
+//   ✓ Four TP modes: Pivot (R/S levels), R-Multiple, Fibonacci extension, ATR
+//   ✓ Pivot TP auto-fallback to ATR when prior session levels are out of range
+//   ✓ Re-Entry on rejection after SL hit (optional)
+//   ✓ Trail SL to break-even at TP1 (optional)
+//   ✓ Statistical overextension via percentile rank — candle coloring
+//   ✓ Risk/reward fill between entry–SL (red) and entry–TP3 (green)
+//   ✓ Hover tooltips on all signals — price, direction, timestamp
+//   ✓ Direction-aware alerts for flips, rejections, and TP/SL hits
+//   ✓ A trend change cancels the running setup and closes a position against the new trend
+//
+// Data Contract:
+//   Price:     REQUIRED   chart symbol
+//   Volume:    OPTIONAL   real trade volume only — pivot-rejection volume filter degrades to pass-through
+//   OI:        NO
+//   Reference: NO
+//   Verdict:   CFD-degraded
+//
+// Changes:
+//   3.4.7 (2026-11-17) — a trend change now ends the setup also while a position
+//         is open, and closes that position when it points against the new trend
+//         (was: the position kept its SL/TP until its own exit)
+//
+// ============================================================================
+
+strategy("Smooth Trend Radar [WavesUnchained] — Strategy", overlay=true,
+     max_labels_count=500,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     commission_type=strategy.commission.percent, commission_value=0,
+     slippage=0, max_bars_back=500)
+
+// Synthetische Bar-Preise (Heikin Ashi, Renko …): Orders füllen zu Marktpreisen,
+// der Backtest gilt dort nicht. Kurzer Hinweis unten rechts statt auf der Kerze.
+var table chartTypeWarn = table.new(position.bottom_right, 1, 1)
+if (barstate.islastconfirmedhistory or barstate.islast) and not chart.is_standard
+    table.cell(chartTypeWarn, 0, 0, "STR Strategy · backtest invalid on this chart type",
+         bgcolor = color.new(color.red, 10), text_color = color.white, text_size = size.small)
+
+// ─── User-defined types ─────────────────────────────────────────────────────
+type bar
+    float o = open
+    float h = high
+    float l = low
+    float c = close
+
+bar b = bar.new()
+
+// Display flag for inputs — keeps the chart status line uncluttered
+disp = display.all - display.status_line
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+g_trend = "Trend"
+autoScale   = input.bool(true, "Auto Timeframe Scaling", group=g_trend, display=disp,
+     tooltip="Automatically selects Supertrend, WMA, and EMA periods for the active timeframe. Manual inputs below are ignored when enabled.")
+stFactor    = input.float(12, "Supertrend Factor",    minval=1, step=0.5, group=g_trend, display=disp,
+     tooltip="ATR multiplier for the Supertrend bands. Higher = wider bands, fewer flips.")
+stAtrPeriod = input.int(90,   "Supertrend ATR Period", minval=1, group=g_trend, display=disp,
+     tooltip="ATR lookback for the Supertrend. Longer = smoother, more lagging bands.")
+wmaLength   = input.int(40,   "WMA Length",            minval=1, group=g_trend, display=disp,
+     tooltip="Weighted Moving Average applied to the Supertrend midline.")
+emaLength   = input.int(14,   "EMA Length",            minval=1, group=g_trend, display=disp,
+     tooltip="EMA applied to the WMA output — second smoothing pass.")
+adxThreshold = input.float(25.0, "ADX Trend/Sideways Threshold", minval=5.0, maxval=50.0, step=1.0, group=g_trend, display=disp,
+     tooltip="ADX threshold: the trend signal fires on the first bar of a trend run where ADX is above this value (on the flip bar or later in the same trend). Rejections fire in both regimes — the threshold only tags them as Trend Pullback (above) or Range Rejection (at or below).")
+trendSlopeLookback  = input.int(3, "Trend Slope Lookback", minval=1, group=g_trend, display=disp,
+     tooltip="Bars back to measure baseline slope for trend direction.")
+trendSlopeThreshold = input.float(0.05, "Trend Slope Threshold (× ATR)", minval=0.0, step=0.01, group=g_trend, display=disp,
+     tooltip="Minimum baseline movement over the Slope Lookback, in ATR units, required to flip trend direction. Higher = fewer, more decisive flips; 0 = flips on any directional move (old crossover behavior).")
+volAdaptive = input.bool(false, "Volatility-Adaptive Band Width", group=g_trend, display=disp,
+     tooltip="Scales the Supertrend factor by the instrument's own ATR percentile rank (200-bar lookback), so the same factor produces comparable relative band width across instruments. Off by default to preserve existing behavior.")
+
+g_rej = "Rejection"
+contFactor     = input.int(2, "Min Baseline Touches", minval=1, maxval=5, group=g_rej, display=disp,
+     tooltip="Minimum number of bars touching the baseline in the pivot window. Filters out single-spike touches — requires sustained contact before the pivot.")
+slopeLookback  = input.int(5, "Slope Lookback",       minval=1, group=g_rej, display=disp,
+     tooltip="Rejection only fires when the baseline is trending in the signal direction over this many bars. Filters out signals in flat/choppy zones.")
+polarityMethod = input.string("Off", "Polarity Filter", options=["Off", "Body", "Pressure"], group=g_rej, display=disp,
+     tooltip="Extra filter at the pivot bar. Off: no filter. Body: pivot bar must be bullish/bearish (close > open). Pressure: close must be in the upper/lower half of the bar's range — more robust against doji bars and long wicks (e.g. NatGas).")
+volumeFilter = input.string("Off", "Volume Filter", options=["Off", "Above Average"], group=g_rej, display=disp,
+     tooltip="Extra filter at the pivot bar. Off: no filter. Above Average: bar volume must exceed its SMA (Volume MA Length) — confirms rejections with real participation. Degrades to pass-through on instruments without real trade volume (tick volume or no volume in the feed).")
+volumeMaLen  = input.int(20, "Volume MA Length", minval=1, group=g_rej, display=disp,
+     tooltip="SMA length for the Volume Filter. Ignored when Volume Filter is Off.")
+g_overext = "Overextension"
+overextLookback  = input.int(100, "Lookback", minval=20, group=g_overext, display=disp,
+     tooltip="How far back to compare current distance from baseline. Self-adapts to symbol/timeframe characteristics.")
+overextThreshold = input.float(85, "Percentile Threshold", minval=50, maxval=99, step=1, group=g_overext, display=disp,
+     tooltip="Bars where the distance from baseline is in the top X% of the lookback window are flagged as overextended. 85 = top 15%, 95 = top 5%.")
+overextBullCol   = input.color(#9c27b0, "Bull-Side Overext (price below baseline)", group=g_overext, display=disp,
+     tooltip="Color used when price is overextended below the baseline — potential reversal up.")
+overextBearCol   = input.color(#ff6f00, "Bear-Side Overext (price above baseline)", group=g_overext, display=disp,
+     tooltip="Color used when price is overextended above the baseline — potential reversal down.")
+
+g_tp = "Targets"
+showTargets   = input.bool(true,           "Show SL / TP Levels", group=g_tp, display=disp)
+tpMode        = input.string("Pivot",      "TP Method",
+     options=["Pivot", "R-Multiple", "Fibonacci", "ATR"], group=g_tp, display=disp,
+     tooltip="Pivot: nearest R/S pivot levels. R-Multiple: multiples of SL distance. Fibonacci: 0.618 / 1.0 / 1.618 of setup swing. ATR: multiples of long ATR.")
+
+slMode        = input.string("Flip Candle", "SL Method",
+     options=["Flip Candle", "Baseline", "Swing"], group=g_tp, display=disp,
+     tooltip="Flip Candle: low/high of the flip bar ± ATR. Baseline: smoothed baseline ± ATR. Swing: lowest low / highest high within lookback ± ATR.")
+swingLookback = input.int(20,  "Swing Lookback (bars)", minval=5, group=g_tp, display=disp,
+     tooltip="SL Method = Swing: bars to look back for swing low/high. Also used as the setup-swing lookback for TP Method = Fibonacci.")
+atrPeriod     = input.int(14,  "ATR Period",            minval=1, group=g_tp, display=disp)
+slMultiplier  = input.float(2.0, "SL ATR Multiplier",   minval=0.1, step=0.1, group=g_tp, display=disp,
+     tooltip="ATR distance added to the SL reference point.")
+
+pivotPeriod   = input.string("D", "Pivot Period",
+     options=["D", "W", "M"], group=g_tp, display=disp,
+     tooltip="Timeframe for pivot calculation. Used with TP Method = Pivot.")
+pivotFormula  = input.string("Camarilla", "Pivot Formula",
+     options=["Classic", "Camarilla"], group=g_tp, display=disp,
+     tooltip="Classic (Floor Trader): PP = (H+L+C)/3. Camarilla: tighter R/S bands scaled from close. Used with TP Method = Pivot.")
+
+tp1Multiplier = input.float(3.0, "TP1 Multiplier",      minval=0.1, step=0.1, group=g_tp, display=disp,
+     tooltip="R-Multiple: × SL distance. ATR: × long ATR. Not used for Pivot or Fibonacci.")
+tp2Multiplier = input.float(5.0, "TP2 Multiplier",      minval=0.1, step=0.1, group=g_tp, display=disp)
+tp3Multiplier = input.float(7.0, "TP3 Multiplier",      minval=0.1, step=0.1, group=g_tp, display=disp)
+atrLongPeriod = input.int(50,    "ATR Long Period",      minval=1,             group=g_tp, display=disp,
+     tooltip="ATR lookback for TP Method = ATR. Longer period = more stable volatility estimate.")
+rejReentry = input.bool(true,  "Re-Entry on Rejection after SL Hit", group=g_tp, display=disp,
+     tooltip="When the SL is hit but the trend direction is unchanged, the next confirmed rejection signal rebuilds the Entry/SL/TP setup at the current price.")
+trailBE    = input.bool(false, "Trail SL to Break-Even at TP1",      group=g_tp, display=disp,
+     tooltip="When TP1 is reached, the SL moves to the entry price. The trade can no longer result in a loss.")
+
+g_col = "Colors"
+bullCol = input.color(#26a69a, "Bullish", group=g_col, display=disp)
+bearCol = input.color(#ef5350, "Bearish", group=g_col, display=disp)
+flipSizeStr = input.string("Small", "Flip Label Size",       options=["Tiny","Small","Normal"], group=g_col, display=disp)
+rejSizeStr  = input.string("Tiny",  "Rejection Label Size",  options=["Tiny","Small","Normal"], group=g_col, display=disp)
+
+// String → size helper
+f_gTS(string _t) =>
+    switch _t
+        "Tiny"   => size.tiny
+        "Small"  => size.small
+        "Normal" => size.normal
+        => size.small
+
+flipSize = f_gTS(flipSizeStr)
+rejSize  = f_gTS(rejSizeStr)
+
+g_alert = "Alerts"
+awaitConfirm = input.bool(true, "Await Bar Confirmation", group=g_alert, display=disp)
+
+// ─── Timeframe-scaled parameters ─────────────────────────────────────────────
+_tf = timeframe.period
+_efFactor    = autoScale ? (_tf == "1" ? 4.0 : _tf == "5" ? 5.0 : _tf == "15" ? 6.0 : _tf == "30" ? 7.0 : _tf == "60" ? 5.0 : _tf == "240" ? 10.0 : timeframe.isdaily ? 12.0 : timeframe.isweekly ? 14.0 : stFactor)    : stFactor
+_efAtrPeriod = autoScale ? (_tf == "1" ? 10   : _tf == "5" ? 14   : _tf == "15" ? 20   : _tf == "30" ? 25   : _tf == "60" ? 14   : _tf == "240" ? 50   : timeframe.isdaily ? 90   : timeframe.isweekly ? 120  : stAtrPeriod) : stAtrPeriod
+_efWma       = autoScale ? (_tf == "1" ? 8    : _tf == "5" ? 10   : _tf == "15" ? 15   : _tf == "30" ? 18   : _tf == "60" ? 10   : _tf == "240" ? 30   : timeframe.isdaily ? 40   : timeframe.isweekly ? 50   : wmaLength)   : wmaLength
+_efEma       = autoScale ? (_tf == "1" ? 3    : _tf == "5" ? 4    : _tf == "15" ? 5    : _tf == "30" ? 6    : _tf == "60" ? 3    : _tf == "240" ? 10   : timeframe.isdaily ? 14   : timeframe.isweekly ? 18   : emaLength)   : emaLength
+_efPivBars   = autoScale ? (_tf == "1" ? 2    : _tf == "5" ? 2    : _tf == "15" ? 2    : _tf == "30" ? 2    : _tf == "60" ? 2    : _tf == "240" ? 3    : timeframe.isdaily ? 5    : timeframe.isweekly ? 4    : 2) : 2
+
+// ─── Supertrend midline ───────────────────────────────────────────────────────
+_supertrend(factor, atrPeriod) =>
+    atr       = ta.atr(atrPeriod)
+    upper     = hl2 + factor * atr
+    lower     = hl2 - factor * atr
+    prevLower = nz(lower[1])
+    prevUpper = nz(upper[1])
+    lower    := lower > prevLower or close[1] < prevLower ? lower : prevLower
+    upper    := upper < prevUpper or close[1] > prevUpper ? upper : prevUpper
+    [lower, upper, atr]
+
+// Volatility-adaptive band width: scale the factor by where current ATR ranks
+// within its own recent history, so the same factor yields comparable relative
+// band width across instruments. Off by default — preserves prior behavior.
+_volPctRank  = ta.percentrank(ta.atr(_efAtrPeriod), 200)
+_efFactorAdj = volAdaptive ? _efFactor * (0.85 + 0.3 * _volPctRank / 100) : _efFactor
+
+[lwr, upr, _stAtr] = _supertrend(_efFactorAdj, _efAtrPeriod)
+tL = ta.ema(ta.wma(math.avg(lwr, upr), _efWma), _efEma)
+
+// ─── Trend direction ─────────────────────────────────────────────────────────
+// Baseline slope over trendSlopeLookback bars, scaled to ATR units. Trend only
+// flips once the move exceeds trendSlopeThreshold — holds previous value
+// otherwise (hysteresis), filtering micro-noise crosses.
+_trendSlope = tL - tL[trendSlopeLookback]
+var int trend = 0
+trend := _trendSlope > _stAtr * trendSlopeThreshold ? 1 : _trendSlope < -_stAtr * trendSlopeThreshold ? -1 : trend
+
+// ADX Trend/Sideways Regime detection
+[diPlus, diMinus, adx] = ta.dmi(14, 14)
+isTrending = not na(adx) and adx > adxThreshold
+isSideways = not na(adx) and adx <= adxThreshold
+
+// One trend signal per trend run: on the first bar of the run where ADX clears
+// the threshold — not only on the flip bar, so a flip below the threshold does
+// not leave the whole trend without a signal.
+var bool trendSignaled = false
+if trend != trend[1]
+    trendSignaled := false
+longSignal  = trend == 1  and isTrending and not trendSignaled
+shortSignal = trend == -1 and isTrending and not trendSignaled
+if longSignal or shortSignal
+    trendSignaled := true
+
+// ─── Rejection detection (live baseline touch validation) ───────────────────
+// Pivots are intentionally not used for signal timing. Rejection is detected
+// from the current bar plus recent baseline contact.
+var int _bullTouches = 0
+var int _bearTouches = 0
+_bullTouches := 0
+_bearTouches := 0
+for i = 0 to contFactor - 1
+    if trend[i] == 1  and low[i]  <= tL[i]
+        _bullTouches += 1
+    if trend[i] == -1 and high[i] >= tL[i]
+        _bearTouches += 1
+
+bool _polBull = polarityMethod == "Off" or (polarityMethod == "Body" ? close > open : (close - low) > (high - close))
+bool _polBear = polarityMethod == "Off" or (polarityMethod == "Body" ? close < open : (close - low) < (high - close))
+bool volumeIsReal = (ta.cum(nz(volume)) > 0 and syminfo.volumetype != "tick") and not na(volume)
+float _volSma = ta.sma(volume, volumeMaLen)
+bool _volOk   = volumeFilter == "Off" or not volumeIsReal or volume > _volSma
+
+// Rejections fire in both ADX regimes — a baseline pullback in an active trend
+// is as valid a signal as one in a range. The regime is carried as a label tag
+// (Trend Pullback vs Range Rejection) rather than used to gate the signal.
+_rejBullRaw = low <= tL and close > tL and trend == 1 and tL > tL[slopeLookback] and _bullTouches >= contFactor and _polBull and _volOk
+_rejBearRaw = high >= tL and close < tL and trend == -1 and tL < tL[slopeLookback] and _bearTouches >= contFactor and _polBear and _volOk
+// Edge: one rejection per run of consecutive qualifying bars
+rejSignalBull = _rejBullRaw and not _rejBullRaw[1]
+rejSignalBear = _rejBearRaw and not _rejBearRaw[1]
+rejRegime     = isTrending ? "Trend Pullback" : "Range Rejection"
+
+// ─── SL / TP levels ──────────────────────────────────────────────────────────
+volatility = ta.atr(atrPeriod)
+atr_long   = ta.atr(atrLongPeriod)
+
+// Pivot data — previous completed period, no repainting
+[piv_h, piv_l, piv_c] = request.security(syminfo.tickerid, pivotPeriod,
+     [high[1], low[1], close[1]], lookahead=barmerge.lookahead_on)
+piv_range = piv_h - piv_l
+// Classic (Floor Trader)
+pp_c  = (piv_h + piv_l + piv_c) / 3
+r1_c  = 2 * pp_c - piv_l
+r2_c  = pp_c + piv_range
+r3_c  = piv_h + 2 * (pp_c - piv_l)
+s1_c  = 2 * pp_c - piv_h
+s2_c  = pp_c - piv_range
+s3_c  = piv_l - 2 * (piv_h - pp_c)
+// Camarilla
+r1_ca = piv_c + piv_range * 1.1 / 12
+r2_ca = piv_c + piv_range * 1.1 / 6
+r3_ca = piv_c + piv_range * 1.1 / 4
+s1_ca = piv_c - piv_range * 1.1 / 12
+s2_ca = piv_c - piv_range * 1.1 / 6
+s3_ca = piv_c - piv_range * 1.1 / 4
+
+var float SL      = na
+var float TP1_lvl = na
+var float TP2_lvl = na
+var float TP3_lvl = na
+var int   tradeDir = 0
+var bool  tp1Done  = false
+var bool  tp2Done  = false
+var bool  tp3Done  = false
+var bool  slDone   = false
+// The strategy stop fills on wicks while slDone tracks close-crosses; latch real stop fills
+// so a wick stop-out still opens the rejection re-entry
+var bool  stopFilled = false
+if strategy.closedtrades > nz(strategy.closedtrades[1]) and strategy.closedtrades.exit_comment(strategy.closedtrades - 1) == "sl"
+    stopFilled := true
+
+var line  entry_line  = na
+var line  sl_line     = na
+var line  tp1_line    = na
+var line  tp2_line    = na
+var line  tp3_line    = na
+var label entry_label = na
+var label sl_label    = na
+var label tp1_label   = na
+var label tp2_label   = na
+var label tp3_label   = na
+var linefill lf_risk   = na
+var linefill lf_reward = na
+var float    entryPrice = na
+
+// A trend change ends the running setup, as in the indicator — no TP/SL
+// tracking or re-entry from a setup whose trend no longer holds. This applies
+// with and without an open position; a position against the new trend is
+// closed in the strategy execution below.
+bool trendChanged = trend != trend[1]
+if trendChanged and tradeDir != 0
+    tradeDir := 0
+    line.delete(entry_line)
+    line.delete(sl_line)
+    line.delete(tp1_line)
+    line.delete(tp2_line)
+    line.delete(tp3_line)
+    label.delete(entry_label)
+    label.delete(sl_label)
+    label.delete(tp1_label)
+    label.delete(tp2_label)
+    label.delete(tp3_label)
+    linefill.delete(lf_risk)
+    linefill.delete(lf_reward)
+    entry_line := na
+    sl_line    := na
+
+bullRejRe = rejReentry and (slDone or stopFilled) and tradeDir == 1  and trend == 1  and rejSignalBull
+bearRejRe = rejReentry and (slDone or stopFilled) and tradeDir == -1 and trend == -1 and rejSignalBear
+
+float _swingLow  = ta.lowest(low, swingLookback)
+float _swingHigh = ta.highest(high, swingLookback)
+
+// SL/TP calc always runs — strategy entries below depend on it regardless of
+// whether the visual targets (showTargets) are switched on.
+if longSignal or shortSignal or bullRejRe or bearRejRe
+    isBull       = longSignal or bullRejRe
+    col          = isBull ? bullCol : bearCol
+    tradeDir    := isBull ? 1 : -1
+    entryPrice  := b.c
+    tp1Done  := false
+    tp2Done  := false
+    tp3Done  := false
+    slDone   := false
+    stopFilled := false
+
+    // SL method selection
+    float rawSL = na
+    if slMode == "Baseline"
+        rawSL := isBull ? tL - volatility * slMultiplier : tL + volatility * slMultiplier
+    else if slMode == "Swing"
+        rawSL := isBull ? _swingLow - volatility * slMultiplier : _swingHigh + volatility * slMultiplier
+    else  // "Flip Candle"
+        rawSL := isBull ? b.l - volatility * slMultiplier : b.h + volatility * slMultiplier
+
+    // Clamp SL to the correct side of entry
+    SL := isBull ? math.min(rawSL, b.c - syminfo.mintick) : math.max(rawSL, b.c + syminfo.mintick)
+
+    // TP levels by mode
+    if tpMode == "Pivot"
+        TP1_lvl := isBull ? (pivotFormula == "Classic" ? r1_c : r1_ca) : (pivotFormula == "Classic" ? s1_c : s1_ca)
+        TP2_lvl := isBull ? (pivotFormula == "Classic" ? r2_c : r2_ca) : (pivotFormula == "Classic" ? s2_c : s2_ca)
+        TP3_lvl := isBull ? (pivotFormula == "Classic" ? r3_c : r3_ca) : (pivotFormula == "Classic" ? s3_c : s3_ca)
+        // Pivot levels can land on the wrong side of entry when price has moved far from
+        // the prior session's range (e.g. price below all S levels for a short, or above
+        // all R levels for a long).  Fall back to ATR in that case.
+        if (isBull and TP1_lvl <= close) or (not isBull and TP1_lvl >= close)
+            TP1_lvl := isBull ? close + atr_long * tp1Multiplier : close - atr_long * tp1Multiplier
+            TP2_lvl := isBull ? close + atr_long * tp2Multiplier : close - atr_long * tp2Multiplier
+            TP3_lvl := isBull ? close + atr_long * tp3Multiplier : close - atr_long * tp3Multiplier
+    else if tpMode == "R-Multiple"
+        slDist   = math.abs(close - SL)
+        TP1_lvl := isBull ? close + slDist * tp1Multiplier : close - slDist * tp1Multiplier
+        TP2_lvl := isBull ? close + slDist * tp2Multiplier : close - slDist * tp2Multiplier
+        TP3_lvl := isBull ? close + slDist * tp3Multiplier : close - slDist * tp3Multiplier
+    else if tpMode == "Fibonacci"
+        swing    = isBull ? _swingLow : _swingHigh
+        fibRange = math.abs(close - swing)
+        TP1_lvl := isBull ? close + fibRange * 0.618 : close - fibRange * 0.618
+        TP2_lvl := isBull ? close + fibRange * 1.0   : close - fibRange * 1.0
+        TP3_lvl := isBull ? close + fibRange * 1.618  : close - fibRange * 1.618
+    else  // ATR
+        TP1_lvl := isBull ? close + atr_long * tp1Multiplier : close - atr_long * tp1Multiplier
+        TP2_lvl := isBull ? close + atr_long * tp2Multiplier : close - atr_long * tp2Multiplier
+        TP3_lvl := isBull ? close + atr_long * tp3Multiplier : close - atr_long * tp3Multiplier
+
+    if showTargets
+        line.delete(entry_line)
+        line.delete(sl_line)
+        line.delete(tp1_line)
+        line.delete(tp2_line)
+        line.delete(tp3_line)
+        label.delete(entry_label)
+        label.delete(sl_label)
+        label.delete(tp1_label)
+        label.delete(tp2_label)
+        label.delete(tp3_label)
+        linefill.delete(lf_risk)
+        linefill.delete(lf_reward)
+
+        x2 = bar_index + 40
+        entry_line  := line.new(bar_index, close,   x2, close,   color=col,                    width=2)
+        sl_line     := line.new(bar_index, SL,      x2, SL,      color=color.new(bearCol, 50), width=1)
+        tp1_line    := line.new(bar_index, TP1_lvl, x2, TP1_lvl, color=color.new(col, 60), width=1)
+        tp2_line    := line.new(bar_index, TP2_lvl, x2, TP2_lvl, color=color.new(col, 40), width=1)
+        tp3_line    := line.new(bar_index, TP3_lvl, x2, TP3_lvl, color=col,                width=1)
+        entry_label := label.new(x2, close,   "Entry " + str.tostring(close,   format.mintick), style=label.style_label_left, color=col,                    textcolor=color.white, size=size.small)
+        sl_label    := label.new(x2, SL,      "SL "    + str.tostring(SL,      format.mintick), style=label.style_label_left, color=color.new(bearCol, 50), textcolor=color.white, size=size.small)
+        tp1_label   := label.new(x2, TP1_lvl, "TP1 "   + str.tostring(TP1_lvl, format.mintick), style=label.style_label_left, color=color.new(col, 60), textcolor=color.white, size=size.small)
+        tp2_label   := label.new(x2, TP2_lvl, "TP2 "   + str.tostring(TP2_lvl, format.mintick), style=label.style_label_left, color=color.new(col, 40), textcolor=color.white, size=size.small)
+        tp3_label   := label.new(x2, TP3_lvl, "TP3 "   + str.tostring(TP3_lvl, format.mintick), style=label.style_label_left, color=col,                textcolor=color.white, size=size.small)
+        lf_risk     := linefill.new(entry_line, sl_line,  color.new(bearCol, 85))
+        lf_reward   := linefill.new(entry_line, tp3_line, color.new(bullCol, 85))
+
+else if showTargets and not na(entry_line)
+    x2 = bar_index + 40
+    line.set_x2(entry_line,  x2)
+    line.set_x2(sl_line,     x2)
+    line.set_x2(tp1_line,    x2)
+    line.set_x2(tp2_line,    x2)
+    line.set_x2(tp3_line,    x2)
+    label.set_x(entry_label, x2)
+    label.set_x(sl_label,    x2)
+    label.set_x(tp1_label,   x2)
+    label.set_x(tp2_label,   x2)
+    label.set_x(tp3_label,   x2)
+
+// ─── Overextension (statistical) ─────────────────────────────────────────────
+// Compares the current distance from the baseline against historical distances
+// over the lookback window. A bar is "overextended" when its distance is in the
+// top X% of all distances seen — self-adapts to symbol/timeframe.
+_distSigned   = close - tL
+_distAbs      = math.abs(_distSigned)
+_distPctRank  = ta.percentrank(_distAbs, overextLookback)
+isOverextBull = _distPctRank > overextThreshold and _distSigned < 0
+isOverextBear = _distPctRank > overextThreshold and _distSigned > 0
+
+// ─── Plots ───────────────────────────────────────────────────────────────────
+plot(tL, "Baseline", color=trend == 1 ? color.new(bullCol, 50) : color.new(bearCol, 50), linewidth=2)
+
+if longSignal
+    label.new(bar_index, tL, "▲",
+         style=label.style_label_up, color=bullCol, textcolor=color.white, size=flipSize,
+         tooltip="Bull Flip\nPrice: " + str.tostring(close, format.mintick) + "\n" + str.format_time(time, "yyyy-MM-dd HH:mm", syminfo.timezone))
+if shortSignal
+    label.new(bar_index, tL, "▼",
+         style=label.style_label_down, color=bearCol, textcolor=color.white, size=flipSize,
+         tooltip="Bear Flip\nPrice: " + str.tostring(close, format.mintick) + "\n" + str.format_time(time, "yyyy-MM-dd HH:mm", syminfo.timezone))
+if rejSignalBull
+    label.new(bar_index, low, "",
+         style=label.style_triangleup, color=color.new(bullCol, 30), size=rejSize,
+         tooltip="Bull Rejection (" + rejRegime + ")\nLow: " + str.tostring(low, format.mintick) + "\n" + str.format_time(time, "yyyy-MM-dd HH:mm", syminfo.timezone))
+if rejSignalBear
+    label.new(bar_index, high, "",
+         style=label.style_triangledown, color=color.new(bearCol, 30), size=rejSize,
+         tooltip="Bear Rejection (" + rejRegime + ")\nHigh: " + str.tostring(high, format.mintick) + "\n" + str.format_time(time, "yyyy-MM-dd HH:mm", syminfo.timezone))
+
+// Gradient-based overextension intensity: from threshold (faded) to 100% (full)
+_overextBullGrad = color.from_gradient(_distPctRank, overextThreshold, 100.0, color.new(overextBullCol, 60), color.new(overextBullCol, 0))
+_overextBearGrad = color.from_gradient(_distPctRank, overextThreshold, 100.0, color.new(overextBearCol, 60), color.new(overextBearCol, 0))
+_barCol = isOverextBull ? _overextBullGrad : isOverextBear ? _overextBearGrad : trend == 1 ? color.new(bullCol, 60) : color.new(bearCol, 60)
+barcolor(_barCol)
+
+// ─── Alerts ──────────────────────────────────────────────────────────────────
+await = awaitConfirm ? barstate.isconfirmed : true
+
+bool _xUpTp1 = ta.crossover(close, TP1_lvl)
+bool _xDnTp1 = ta.crossunder(close, TP1_lvl)
+bool _xUpTp2 = ta.crossover(close, TP2_lvl)
+bool _xDnTp2 = ta.crossunder(close, TP2_lvl)
+bool _xUpTp3 = ta.crossover(close, TP3_lvl)
+bool _xDnTp3 = ta.crossunder(close, TP3_lvl)
+bool _xDnSl  = ta.crossunder(close, SL)
+bool _xUpSl  = ta.crossover(close, SL)
+
+tp1Hit = not tp1Done and tradeDir != 0 and (tradeDir == 1 ? _xUpTp1 : _xDnTp1)
+tp2Hit = not tp2Done and tradeDir != 0 and (tradeDir == 1 ? _xUpTp2 : _xDnTp2)
+tp3Hit = not tp3Done and tradeDir != 0 and (tradeDir == 1 ? _xUpTp3 : _xDnTp3)
+slHit  = not slDone  and tradeDir != 0 and (tradeDir == 1 ? _xDnSl  : _xUpSl)
+
+if tp1Hit
+    tp1Done := true
+    if trailBE
+        SL := entryPrice
+        if not na(sl_line)
+            line.set_y1(sl_line,  SL)
+            line.set_y2(sl_line,  SL)
+            label.set_y(sl_label, SL)
+            label.set_text(sl_label, "BE " + str.tostring(SL, format.mintick))
+            linefill.delete(lf_risk)
+            lf_risk := na
+if tp2Hit
+    tp2Done := true
+if tp3Hit
+    tp3Done := true
+if slHit
+    slDone  := true
+    tp1Done := true
+    tp2Done := true
+    tp3Done := true
+    line.delete(entry_line)
+    line.delete(sl_line)
+    line.delete(tp1_line)
+    line.delete(tp2_line)
+    line.delete(tp3_line)
+    label.delete(entry_label)
+    label.delete(sl_label)
+    label.delete(tp1_label)
+    label.delete(tp2_label)
+    label.delete(tp3_label)
+    linefill.delete(lf_risk)
+    linefill.delete(lf_reward)
+    entry_line := na
+
+_ticker = syminfo.tickerid + " (" + timeframe.period + ")"
+if longSignal and await
+    alert("Smooth Trend Radar Buy — " + _ticker, alert.freq_once_per_bar_close)
+if shortSignal and await
+    alert("Smooth Trend Radar Sell — " + _ticker, alert.freq_once_per_bar_close)
+// ─── Strategy inputs ─────────────────────────────────────────────────────────
+g_strat       = "Strategy"
+tradeDirInput = input.string("Both", "Trade Direction",
+     options=["Both", "Long Only", "Short Only"], group=g_strat,
+     tooltip="Filter entries by direction. Useful for asymmetric instruments.")
+confirmClose  = input.bool(true,  "Entries on Confirmed Bar Only", group=g_strat,
+     tooltip="Only trigger entries on closed bars. Prevents repainting in live trading.")
+cooldownBars  = input.int(0,     "Cooldown Bars After Exit", minval=0, group=g_strat,
+     tooltip="Block new entries for N bars after a position closes. Set 0 to disable.")
+enableBE      = input.bool(false, "Break-Even Stop", group=g_strat,
+     tooltip="Move SL to entry price once the trade is N×ATR in profit.")
+beATRInput    = input.float(1.0,  "Break-Even Trigger (ATR×)", minval=0.1, step=0.1, group=g_strat,
+     tooltip="ATR distance from entry that triggers the break-even move.")
+
+g_filters     = "Filters"
+useSession    = input.bool(false, "Session Filter", group=g_filters)
+sessionInput  = input.session("0000-2345", "Session", group=g_filters)
+useDateRange  = input.bool(false, "Date Range", group=g_filters)
+dateFrom      = input.time(timestamp("01 Jan 2020 00:00 +0000"), "From", group=g_filters)
+dateTo        = input.time(timestamp("31 Dec 2030 23:59 +0000"), "To",   group=g_filters)
+useMaxDD      = input.bool(false, "Max Drawdown", group=g_filters)
+maxDD         = input.float(20.0, "Max Drawdown (%)", minval=1, step=1, group=g_filters)
+useMaxIntraDD = input.bool(false, "Max Intraday Loss", group=g_filters)
+maxIntraDD    = input.float(5.0,  "Max Intraday Loss (%)", minval=1, step=1, group=g_filters)
+useLossStreak = input.bool(false, "Losing Streak Limit", group=g_filters)
+maxLossStreak = input.int(5,      "Max Consecutive Losses", minval=1, group=g_filters)
+
+strategy.risk.max_drawdown(useMaxDD ? maxDD : 100, strategy.percent_of_equity)
+strategy.risk.max_intraday_loss(useMaxIntraDD ? maxIntraDD : 100, strategy.percent_of_equity)
+
+var int _genLossStreak = 0
+if strategy.losstrades > strategy.losstrades[1]
+    _genLossStreak := _genLossStreak + 1
+if strategy.wintrades > strategy.wintrades[1]
+    _genLossStreak := 0
+_genFilterOk = (not useSession or not na(time(timeframe.period, sessionInput))) and
+     (not useDateRange or (time >= dateFrom and time <= dateTo)) and
+     (not useLossStreak or _genLossStreak < maxLossStreak)
+
+var int _lastExitBar = na
+_justClosed = strategy.closedtrades > 0 and strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) == bar_index
+if _justClosed
+    _lastExitBar := bar_index
+_inCooldown = cooldownBars > 0 and not na(_lastExitBar) and (bar_index - _lastExitBar) < cooldownBars
+_canEntry   = not _inCooldown and (not confirmClose or barstate.isconfirmed) and _genFilterOk
+exitLvlInput  = input.string("TP1", "Exit at TP",
+     options=["TP1", "TP2", "TP3", "None (next signal)"], group=g_strat,
+     tooltip="TP level for the exit limit order. 'None' holds until the stop, the next opposing signal or a trend change against the position.")
+
+// ─── Strategy execution ───────────────────────────────────────────────────────
+_canLong  = tradeDirInput != "Short Only"
+_canShort = tradeDirInput != "Long Only"
+
+var float _exitTP = na
+
+_doLong  = (longSignal or bullRejRe)  and _canLong  and _canEntry
+_doShort = (shortSignal or bearRejRe) and _canShort and _canEntry
+
+if _doLong
+    _exitTP := exitLvlInput == "TP1" ? TP1_lvl :
+               exitLvlInput == "TP2" ? TP2_lvl :
+               exitLvlInput == "TP3" ? TP3_lvl : na
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=SL, limit=_exitTP, comment_loss="sl")
+
+if _doShort
+    _exitTP := exitLvlInput == "TP1" ? TP1_lvl :
+               exitLvlInput == "TP2" ? TP2_lvl :
+               exitLvlInput == "TP3" ? TP3_lvl : na
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=SL, limit=_exitTP, comment_loss="sl")
+
+// ─── Break-even management (merged into the single exit stop below — a second
+// strategy.exit() call on the same entry would otherwise compete for the
+// already-reserved exit quantity) ────────────────────────────────────────────
+float _beAtr = ta.atr(14) * beATRInput
+if enableBE
+    if strategy.position_size > 0 and close >= strategy.position_avg_price + _beAtr
+        SL := math.max(SL, strategy.position_avg_price)
+    if strategy.position_size < 0 and close <= strategy.position_avg_price - _beAtr
+        SL := math.min(SL, strategy.position_avg_price)
+
+// Trend change against the open position: the setup is gone, close the trade
+// (skipped when the opposite entry fires on the same bar — it reverses the position itself)
+if trendChanged and trend == -1 and strategy.position_size > 0 and not _doShort
+    strategy.close("Long", comment="trend")
+if trendChanged and trend == 1 and strategy.position_size < 0 and not _doLong
+    strategy.close("Short", comment="trend")
+
+if strategy.position_size > 0
+    strategy.exit("Long Exit", "Long", stop=SL, limit=_exitTP, comment_loss="sl")
+if strategy.position_size < 0
+    strategy.exit("Short Exit", "Short", stop=SL, limit=_exitTP, comment_loss="sl")
+
+// ============================================================================
+// CFD cost model (display only)
+// The tester books no spread, financing or daily premium adjustment: this
+// block deducts them per closed trade and shows the result in its own table.
+// Spread is paid once per trade; financing is charged per calendar night held
+// (a weekend counts as 3 nights, as at the broker). Set the values from the
+// broker's current sheet for the symbol; 0 = cost not applied.
+// ============================================================================
+g_cost = "Cost Model (CFD)"
+cmSpread   = input.float(0.0, "Spread (price points)", minval=0.0, step=0.0001, group=g_cost,
+     tooltip="Full spread paid once per trade, in price points of the symbol. Capital CFDs charge no commission. 0 = not applied.")
+cmFinLong  = input.float(0.0, "Financing Long (% p.a.)", step=0.1, group=g_cost,
+     tooltip="Yearly rate on the position value, charged per calendar night held. Negative = credit. Include the daily premium adjustment for commodities. 0 = not applied.")
+cmFinShort = input.float(0.0, "Financing Short (% p.a.)", step=0.1, group=g_cost,
+     tooltip="As Financing Long, for short positions. Long and short differ at most brokers.")
+cmStress   = input.float(1.5, "Cost Stress Factor", minval=1.0, step=0.1, group=g_cost,
+     tooltip="All costs multiplied by this factor in the second result column. A result that flips under stress does not carry.")
+cmShow     = input.bool(true, "Show Cost Table", group=g_cost)
+
+var int   cmDone     = 0
+var int   cmNights   = 0
+var float cmGross    = 0.0
+var float cmSpreadSum = 0.0
+var float cmFinSum   = 0.0
+var float cmWin      = 0.0
+var float cmLoss     = 0.0
+var float cmWinS     = 0.0
+var float cmLossS    = 0.0
+
+int cmNow = strategy.closedtrades
+if cmNow > cmDone
+    for i = cmDone to cmNow - 1
+        float sz = strategy.closedtrades.size(i)
+        float qty = math.abs(sz)
+        int nights = int(math.max(0, math.floor(strategy.closedtrades.exit_time(i) / 86400000) - math.floor(strategy.closedtrades.entry_time(i) / 86400000)))
+        float rate = (sz > 0 ? cmFinLong : cmFinShort) / 100.0 / 365.0
+        float spr = qty * cmSpread * syminfo.pointvalue
+        float fin = qty * strategy.closedtrades.entry_price(i) * syminfo.pointvalue * rate * nights
+        float pnl = strategy.closedtrades.profit(i)
+        float net = pnl - spr - fin
+        float netS = pnl - cmStress * (spr + fin)
+        cmNights += nights
+        cmGross += pnl
+        cmSpreadSum += spr
+        cmFinSum += fin
+        cmWin += math.max(net, 0)
+        cmLoss += math.max(-net, 0)
+        cmWinS += math.max(netS, 0)
+        cmLossS += math.max(-netS, 0)
+    cmDone := cmNow
+
+var table cmTbl = table.new(position.bottom_left, 3, 9,
+     bgcolor=color.new(color.white, 5), border_color=color.new(color.gray, 60), border_width=1,
+     frame_color=color.new(color.gray, 40), frame_width=1)
+if (barstate.islastconfirmedhistory or barstate.islast) and cmShow
+    color cmTc = color.new(color.gray, 20)
+    color cmHd = color.new(color.gray, 90)
+    bool cmSet = cmSpread != 0.0 or cmFinLong != 0.0 or cmFinShort != 0.0
+    float cmNetB = cmWin - cmLoss
+    float cmNetS = cmWinS - cmLossS
+    string cmPfB = cmLoss > 0 ? str.tostring(cmWin / cmLoss, "#.##") : "–"
+    string cmPfS = cmLossS > 0 ? str.tostring(cmWinS / cmLossS, "#.##") : "–"
+    table.cell(cmTbl, 0, 0, "Cost model", text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 1, 0, "Costs", text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 2, 0, "Stress ×" + str.tostring(cmStress, "#.#"), text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 0, 1, "Status", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 1, cmSet ? "applied" : "NOT SET – cost-free", text_color=cmSet ? cmTc : #ff6f00, text_size=size.small)
+    table.cell(cmTbl, 2, 1, "", text_size=size.small)
+    table.cell(cmTbl, 0, 2, "Trades / avg nights", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 2, str.tostring(cmDone) + " / " + (cmDone > 0 ? str.tostring(cmNights / cmDone, "#.#") : "–"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 2, "", text_size=size.small)
+    table.cell(cmTbl, 0, 3, "Net before costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 3, str.tostring(cmGross, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 3, str.tostring(cmGross, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 4, "Spread", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 4, str.tostring(-cmSpreadSum, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 4, str.tostring(-cmSpreadSum * cmStress, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 5, "Financing", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 5, str.tostring(-cmFinSum, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 5, str.tostring(-cmFinSum * cmStress, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 6, "Net after costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 6, str.tostring(cmNetB, "#.##"), text_color=cmNetB >= 0 ? #00c853 : #d50000, text_size=size.small)
+    table.cell(cmTbl, 2, 6, str.tostring(cmNetS, "#.##"), text_color=cmNetS >= 0 ? #00c853 : #d50000, text_size=size.small)
+    table.cell(cmTbl, 0, 7, "Profit factor after costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 7, cmPfB, text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 7, cmPfS, text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 8, "Tester columns exclude these costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 8, "", text_size=size.small)
+    table.cell(cmTbl, 2, 8, "", text_size=size.small)
+
+// ============================================================================
+// Random baseline (shadow test, display only — no orders)
+// The strategy's own entries and a random set with the same side and the same
+// frequency are both replayed here with one identical fixed exit (ATR target,
+// ATR stop, time limit), gross in R, long and short apart. A signal that does
+// not beat the random set under the same exit carries no information of its
+// own. The random trigger rate is the running signal rate of this chart
+// (causal); the seed is fixed, so the set repeats. One seed is one draw: with
+// few trades the difference is noise. Set target/stop/time like the strategy's
+// Fixed exit to compare against its own result.
+// ============================================================================
+g_rb = "Random Baseline"
+rbOn     = input.bool(true, "Show Random Baseline", group=g_rb,
+     tooltip="Replays signal entries and random entries with one fixed exit and compares them per side. Display only.")
+rbTp     = input.float(2.0, "Baseline Target (ATR×)", minval=0.1, step=0.1, group=g_rb)
+rbSl     = input.float(1.5, "Baseline Stop (ATR×)",   minval=0.1, step=0.1, group=g_rb)
+rbBars   = input.int(24, "Baseline Time Limit (Bars)", minval=1, group=g_rb)
+rbSeed   = input.int(42, "Random Seed", group=g_rb,
+     tooltip="Fixed seed: the random set is the same on every load. Change it to see how much one draw varies.")
+rbAtrLen = input.int(14, "Baseline ATR Length", minval=1, group=g_rb)
+
+// One simulated side: enters at the open after the trigger, one trade at a time,
+// returns the trade result in R on the bar it closes (na otherwise). Stop wins a same-bar tie.
+rbTrack(bool trig, bool isLong, float atrV, float tpM, float slM, int tb) =>
+    var bool  inT  = false
+    var bool  pend = false
+    var float pAtr = na
+    var float ep   = na
+    var float stp  = na
+    var float tgt  = na
+    var float risk = na
+    var int   held = 0
+    float res = na
+    if pend and not inT
+        ep := open
+        risk := slM * pAtr
+        stp := isLong ? ep - risk : ep + risk
+        tgt := isLong ? ep + tpM * pAtr : ep - tpM * pAtr
+        inT := true
+        held := 0
+        pend := false
+    else if inT
+        held += 1
+    if inT
+        bool hitS = isLong ? low <= stp : high >= stp
+        bool hitT = isLong ? high >= tgt : low <= tgt
+        if hitS
+            res := -1.0
+        else if hitT
+            res := tpM / slM
+        else if held >= tb
+            res := (isLong ? close - ep : ep - close) / risk
+        if not na(res)
+            inT := false
+    if trig and not inT and not pend
+        pend := true
+        pAtr := atrV
+    res
+
+bool rbEligible = _genFilterOk and (not confirmClose or barstate.isconfirmed)
+bool rbSigL = (longSignal or bullRejRe) and _canLong and rbEligible
+bool rbSigS = (shortSignal or bearRejRe) and _canShort and rbEligible
+var int rbCntL = 0
+var int rbCntS = 0
+var int rbEligibleBars = 0
+if rbEligible
+    rbEligibleBars += 1
+if rbSigL
+    rbCntL += 1
+if rbSigS
+    rbCntS += 1
+float rbRateL = rbEligibleBars > 0 ? rbCntL / float(rbEligibleBars) : 0.0
+float rbRateS = rbEligibleBars > 0 ? rbCntS / float(rbEligibleBars) : 0.0
+float rbU1 = math.random(0, 1, rbSeed)
+float rbU2 = math.random(0, 1, rbSeed + 1000)
+float rbAtr = ta.atr(rbAtrLen)
+
+float rbRSL = rbTrack(rbSigL, true,  rbAtr, rbTp, rbSl, rbBars)
+float rbRRL = rbTrack(rbEligible and rbU1 < rbRateL, true,  rbAtr, rbTp, rbSl, rbBars)
+float rbRSS = rbTrack(rbSigS, false, rbAtr, rbTp, rbSl, rbBars)
+float rbRRS = rbTrack(rbEligible and rbU2 < rbRateS, false, rbAtr, rbTp, rbSl, rbBars)
+
+var int   rbNSL = 0
+var int   rbNRL = 0
+var int   rbNSS = 0
+var int   rbNRS = 0
+var float rbSumSL = 0.0
+var float rbSumRL = 0.0
+var float rbSumSS = 0.0
+var float rbSumRS = 0.0
+var int   rbWinSL = 0
+var int   rbWinRL = 0
+var int   rbWinSS = 0
+var int   rbWinRS = 0
+if not na(rbRSL)
+    rbNSL += 1
+    rbSumSL += rbRSL
+    rbWinSL += rbRSL > 0 ? 1 : 0
+if not na(rbRRL)
+    rbNRL += 1
+    rbSumRL += rbRRL
+    rbWinRL += rbRRL > 0 ? 1 : 0
+if not na(rbRSS)
+    rbNSS += 1
+    rbSumSS += rbRSS
+    rbWinSS += rbRSS > 0 ? 1 : 0
+if not na(rbRRS)
+    rbNRS += 1
+    rbSumRS += rbRRS
+    rbWinRS += rbRRS > 0 ? 1 : 0
+
+var table rbTbl = table.new(position.top_left, 4, 8,
+     bgcolor=color.new(color.white, 5), border_color=color.new(color.gray, 60), border_width=1,
+     frame_color=color.new(color.gray, 40), frame_width=1)
+if (barstate.islastconfirmedhistory or barstate.islast) and rbOn
+    color rbTc = color.new(color.gray, 20)
+    color rbHd = color.new(color.gray, 90)
+    float rbAvgSL = rbNSL > 0 ? rbSumSL / rbNSL : na
+    float rbAvgRL = rbNRL > 0 ? rbSumRL / rbNRL : na
+    float rbAvgSS = rbNSS > 0 ? rbSumSS / rbNSS : na
+    float rbAvgRS = rbNRS > 0 ? rbSumRS / rbNRS : na
+    float rbDL = rbAvgSL - rbAvgRL
+    float rbDS = rbAvgSS - rbAvgRS
+    table.cell(rbTbl, 0, 0, "Fixed-exit baseline (gross R)", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 1, 0, "n", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 2, 0, "Win %", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 3, 0, "avg R", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 0, 1, "Long – signal", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 1, str.tostring(rbNSL), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 1, rbNSL > 0 ? str.tostring(100.0 * rbWinSL / rbNSL, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 1, na(rbAvgSL) ? "–" : str.tostring(rbAvgSL, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 2, "Long – random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 2, str.tostring(rbNRL), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 2, rbNRL > 0 ? str.tostring(100.0 * rbWinRL / rbNRL, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 2, na(rbAvgRL) ? "–" : str.tostring(rbAvgRL, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 3, "Long – signal minus random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 3, "", text_size=size.small)
+    table.cell(rbTbl, 2, 3, "", text_size=size.small)
+    table.cell(rbTbl, 3, 3, na(rbDL) ? "–" : str.tostring(rbDL, "#.##"), text_color=na(rbDL) ? rbTc : (rbDL >= 0 ? #00c853 : #d50000), text_size=size.small)
+    table.cell(rbTbl, 0, 4, "Short – signal", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 4, str.tostring(rbNSS), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 4, rbNSS > 0 ? str.tostring(100.0 * rbWinSS / rbNSS, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 4, na(rbAvgSS) ? "–" : str.tostring(rbAvgSS, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 5, "Short – random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 5, str.tostring(rbNRS), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 5, rbNRS > 0 ? str.tostring(100.0 * rbWinRS / rbNRS, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 5, na(rbAvgRS) ? "–" : str.tostring(rbAvgRS, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 6, "Short – signal minus random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 6, "", text_size=size.small)
+    table.cell(rbTbl, 2, 6, "", text_size=size.small)
+    table.cell(rbTbl, 3, 6, na(rbDS) ? "–" : str.tostring(rbDS, "#.##"), text_color=na(rbDS) ? rbTc : (rbDS >= 0 ? #00c853 : #d50000), text_size=size.small)
+    table.cell(rbTbl, 0, 7, "Gross, no costs · one seed · n < 30 is a hint", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 7, "", text_size=size.small)
+    table.cell(rbTbl, 2, 7, "", text_size=size.small)
+    table.cell(rbTbl, 3, 7, "", text_size=size.small)

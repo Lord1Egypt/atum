@@ -1,0 +1,18 @@
+//@version=5
+indicator("ta/sma")
+// Test ta.sma (Simple Moving Average)
+// Like Pine, na until the window has `length` bars. Over the last 5 bars close
+// is 297, 298, 299, 300, 301.
+
+// Bars: 5
+
+// Windows [297,298,299], [298,299,300], [299,300,301]
+sma3 = ta.sma(close, 3)
+log.info(str.tostring(sma3))
+
+// Expected output:
+// NaN
+// NaN
+// 298
+// 299
+// 300

@@ -1,0 +1,99 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © abdeeaas57
+
+//@version=5
+indicator("Abdeefx indicator", overlay = true)
+
+// author: magictradex (indebted to Kozlod)
+// dashboard added; upgraded to Pine v5 (tables require v5)
+
+// ── Inputs ──────────────────────────────────────────────
+ma10len  = input.int(10, "MA10", minval = 1)
+ma20len  = input.int(20, "MA20", minval = 1)
+
+showDash = input.bool(true, "Show Dashboard", group = "Dashboard")
+dashPos  = input.string("Top Right", "Position",
+     options = ["Top Left", "Top Right", "Bottom Left", "Bottom Right", "Middle Right"],
+     group = "Dashboard")
+dashSize = input.string("Tiny", "Text Size",
+     options = ["Tiny", "Small", "Normal", "Large"], group = "Dashboard")
+
+// ── Heikin Ashi calculation ─────────────────────────────
+haClose = (open + high + low + close) / 4
+haOpen  = 0.0
+haOpen := na(haOpen[1]) ? (open + close) / 2 : (haOpen[1] + haClose[1]) / 2
+
+// ── Signals ─────────────────────────────────────────────
+blueCol = #3a85ad
+redCol  = #b71c1c
+
+turnBlue = haClose >  haOpen and haClose[1] <= haOpen[1]
+turnRed  = haClose <= haOpen and haClose[1] >  haOpen[1]
+
+plotshape(turnBlue, style = shape.circle, location = location.belowbar, color = blueCol)
+plotshape(turnRed,  style = shape.square, location = location.abovebar, color = redCol)
+
+alertcondition(turnBlue, "ha_#3a85ad", "ha_#3a85ad")
+alertcondition(turnRed,  "ha_#f44336", "ha_#f44336")
+
+// ── Moving averages ─────────────────────────────────────
+ma10 = ta.sma(close, ma10len)
+ma20 = ta.sma(close, ma20len)
+
+plot(ma10, "MA 10", color = blueCol, linewidth = 1)
+plot(ma20, "MA 20", color = redCol,  linewidth = 1)
+
+// ── Dashboard state ─────────────────────────────────────
+var string lastSignal = "None"
+if turnBlue
+    lastSignal := "BUY"
+if turnRed
+    lastSignal := "SELL"
+
+barsSinceSig = ta.barssince(turnBlue or turnRed)
+
+haBull    = haClose > haOpen
+maBull    = ma10 > ma20
+aboveMA20 = close > ma20
+distPct   = (close - ma20) / ma20 * 100
+
+bullScore = (haBull ? 1 : 0) + (maBull ? 1 : 0) + (aboveMA20 ? 1 : 0)
+biasText  = bullScore == 3 ? "BULLISH" : bullScore == 0 ? "BEARISH" : "MIXED"
+biasCol   = bullScore == 3 ? blueCol   : bullScore == 0 ? redCol    : color.gray
+
+// ── Dashboard table ─────────────────────────────────────
+tablePos = switch dashPos
+    "Top Left"     => position.top_left
+    "Top Right"    => position.top_right
+    "Bottom Left"  => position.bottom_left
+    "Bottom Right" => position.bottom_right
+    => position.middle_right
+
+txtSize = switch dashSize
+    "Tiny"  => size.tiny
+    "Small" => size.small
+    "Large" => size.large
+    => size.normal
+
+var table dash = table.new(tablePos, 2, 7,
+     bgcolor = color.new(color.black, 20),
+     border_color = color.new(color.gray, 50), border_width = 1,
+     frame_color = color.gray, frame_width = 1)
+
+f_row(r, label, value, valCol) =>
+    table.cell(dash, 0, r, label, text_color = color.silver, text_size = txtSize, text_halign = text.align_left)
+    table.cell(dash, 1, r, value, text_color = valCol, text_size = txtSize, text_halign = text.align_right)
+
+if showDash and barstate.islast
+    table.cell(dash, 0, 0, "ABDEEFX", text_color = color.white, text_size = txtSize,
+         bgcolor = color.new(color.gray, 60))
+    table.merge_cells(dash, 0, 0, 1, 0)
+
+    f_row(1, "HA",       haBull ? "Bullish" : "Bearish", haBull ? blueCol : redCol)
+    f_row(2, "Signal",    lastSignal, lastSignal == "BUY" ? blueCol : lastSignal == "SELL" ? redCol : color.gray)
+    f_row(3, "Bars",     na(barsSinceSig) ? "-" : str.tostring(barsSinceSig), color.white)
+    f_row(4, "MA10/20",   maBull ? "MA10 >" : "MA10 <", maBull ? blueCol : redCol)
+    f_row(5, "vs MA20",  str.tostring(distPct, "#.##") + "%", aboveMA20 ? blueCol : redCol)
+    f_row(6, "Bias",           biasText, biasCol)
+else if not showDash
+    table.clear(dash, 0, 0, 1, 6)

@@ -1,0 +1,39 @@
+//@version=5
+indicator("builtins/conversions")
+// Test bool(), int(), float() conversions
+
+// bool() tests
+bool1 = bool(5.0)
+bool2 = bool(0.0)
+bool3 = bool(na)
+
+// int() tests
+int1 = int(5.7)
+int2 = int(-5.7)
+int3 = int(true)
+int4 = int(false)
+
+// float() tests
+float1 = float(5)
+float2 = float(true)
+
+log.info(str.tostring(bool1))
+log.info(str.tostring(bool2))
+log.info(str.tostring(bool3))
+log.info(str.tostring(int1))
+log.info(str.tostring(int2))
+log.info(str.tostring(int3))
+log.info(str.tostring(int4))
+log.info(str.tostring(float1))
+log.info(str.tostring(float2))
+
+// Expected output:
+// true
+// false
+// false
+// 5
+// -5
+// 1
+// 0
+// 5
+// 1

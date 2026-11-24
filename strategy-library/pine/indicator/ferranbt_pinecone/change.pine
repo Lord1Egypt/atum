@@ -1,0 +1,21 @@
+//@version=5
+indicator("ta/change")
+// Test ta.change (Difference between current and N bars ago)
+// Close rises by 1 each bar, so every change equals the bar distance once
+// enough bars have been seen.
+
+// Bars: 3
+
+change1 = ta.change(close, 1)
+log.info(str.tostring(change1))
+
+change2 = ta.change(close, 2)
+log.info(str.tostring(change2))
+
+// Expected output:
+// NaN
+// NaN
+// 1
+// NaN
+// 1
+// 2

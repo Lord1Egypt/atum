@@ -1,0 +1,30 @@
+// Pine Script var vs varip: persistent variables explained
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/var-vs-varip
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("var vs varip", overlay = false)
+
+// No keyword: the declaration runs on every execution, so the count starts again from 0
+int plainCount = 0
+plainCount += 1
+
+// var: initialized on the first bar only, then carried from bar to bar
+var int barCount = 0
+barCount += 1
+
+// varip: carried from bar to bar and from one live update to the next
+varip int execCount = 0
+execCount += 1
+
+// varip reset on each new bar: the number of updates this bar has received
+varip int updatesThisBar = 0
+if barstate.isnew
+    updatesThisBar := 0
+updatesThisBar += 1
+
+plot(plainCount, "No keyword (always 1)", color.gray)
+plot(updatesThisBar, "Updates on this bar (varip)", color.orange, style = plot.style_columns)
+plot(execCount - barCount, "Live updates beyond one per bar", color.blue)
+plot(barCount, "Bars counted (var)", display = display.data_window)
+plot(execCount, "Executions counted (varip)", display = display.data_window)

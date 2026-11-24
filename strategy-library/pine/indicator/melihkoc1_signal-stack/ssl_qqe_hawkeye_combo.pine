@@ -1,0 +1,74 @@
+//@version=5
+indicator("SSL + QQE + HawkEye", overlay=true)
+
+// ======================== SETTINGS =======================================
+ssl1Len       = 15
+ssl2Len       = 5
+jmaPhase      = 3
+jmaPower      = 1
+qqeRsiLen     = 6
+qqeSmooth     = 2
+qqeFactor     = 3.0
+hawkLen       = 200 // Length of the volume average
+hawkDiv       = 1.6
+
+// ======================== CALCULATIONS ===================================
+
+// 1) SSL Hybrid - baseline confirmation
+ssl1High = ta.ema(high, ssl1Len)
+ssl1Low  = ta.ema(low, ssl1Len)
+var int Hlv1 = 0
+Hlv1 := close > ssl1High ? 1 : close < ssl1Low ? -1 : nz(Hlv1[1])
+sslBullish = Hlv1 == 1
+
+// 2) QQE MOD - blue bar confirmation
+qqeRsi   = ta.rsi(close, qqeRsiLen)
+qqeRsiMa = ta.ema(qqeRsi, qqeSmooth)
+qqeHist  = qqeRsiMa - 50
+qqeBlueBar = qqeHist > 0
+qqeRedBar  = qqeHist < 0
+
+// 3) HawkEye Volume - blue confirmation
+// Colours 1 and 3 are blue (buying/neutral), colour 2 is red (selling)
+hawkVma   = ta.sma(volume, hawkLen)
+hawkRange = high - low
+isBearCandle = close <= open
+isHighVol    = volume >= hawkVma
+// Selling pressure (red): high volume + weak close
+hawkBear     = isBearCandle and isHighVol and hawkRange > 0 and (close - low) < (hawkRange / hawkDiv)
+// Blue condition: blue when there is no selling pressure
+hawkBlue     = not hawkBear
+
+// ======================== FILTERED SIGNAL LOGIC ==========================
+
+// Triple confirmation (are all 3 aligned right now?)
+isAllBull = sslBullish and qqeBlueBar and hawkBlue
+isAllBear = (not sslBullish) and qqeRedBar and hawkBear
+
+// State tracking to avoid repeated signals
+var int trendState = 0 // 0: neutral, 1: long, -1: short
+
+buySignal  = false
+sellSignal = false
+
+if isAllBull and trendState != 1
+    buySignal := true
+    trendState := 1
+
+if isAllBear and trendState != -1
+    sellSignal := true
+    trendState := -1
+
+// Reset the state when SSL flips (end of trend)
+if trendState == 1 and not sslBullish
+    trendState := 0
+if trendState == -1 and sslBullish
+    trendState := 0
+
+// ======================== PLOTTING ======================================
+
+plotshape(buySignal,  title="BUY CONFIRMED",  style=shape.labelup,   location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white, text="BUY",  size=size.normal)
+plotshape(sellSignal, title="SELL CONFIRMED", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0),   textcolor=color.white, text="SELL", size=size.normal)
+
+// Optionally keep the SSL channel as a faint visual reference
+// plot(sslBullish ? ssl1Low : ssl1High, color=sslBullish ? color.green : color.red, linewidth=1, title="SSL Baseline")

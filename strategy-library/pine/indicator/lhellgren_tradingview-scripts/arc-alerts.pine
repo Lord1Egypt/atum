@@ -1,0 +1,366 @@
+//@version=6
+indicator("ARC Alerts v1", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// =========================
+// SETTINGS
+// =========================
+tz = "America/Los_Angeles"
+
+mesSymbol = input.symbol("CME_MINI:MES1!", "MES Symbol")
+mnqSymbol = input.symbol("CME_MINI:MNQ1!", "MNQ Symbol")
+m2kSymbol = input.symbol("CME_MINI:M2K1!", "M2K Symbol")
+
+enableLevel1 = input.bool(true, "Enable Level 1 Silent Alerts")
+enableLevel2 = input.bool(true, "Enable Level 2 Silent Alerts")
+enableLevel3 = input.bool(true, "Enable Level 3 Push Alerts")
+
+minScoreLevel3 = input.int(8, "Minimum Level 3 Score", minval=1, maxval=10)
+
+bodyLookback = input.int(10, "Body Average Lookback", minval=3)
+volumeLookback = input.int(20, "Volume Average Lookback", minval=5)
+strongBodyMult = input.float(1.25, "Strong Body Multiplier", step=0.05)
+strongVolMult = input.float(1.25, "Strong Volume Multiplier", step=0.05)
+nearLevelTicks = input.int(8, "Near Level Distance In Ticks", minval=1)
+
+showDebug = input.bool(true, "Show Debug Table")
+
+// =========================
+// SESSION FILTER
+// =========================
+inTradeWindow = not na(time(timeframe.period, "0630-0900:1234567", tz))
+
+// =========================
+// VWAP
+// =========================
+vwap = ta.vwap(hlc3)
+vwapSlopeUp = vwap > vwap[3]
+vwapSlopeDown = vwap < vwap[3]
+
+
+// =========================
+// KEY LEVELS
+// =========================
+
+// Previous day high/low
+prevDayHigh = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_off)
+prevDayLow  = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+// Overnight high/low: 13:00-06:30 PT
+overnightSession = "1300-0630:1234567"
+
+f_overnight() =>
+    var float onHigh = na
+    var float onLow = na
+    var float lockedHigh = na
+    var float lockedLow = na
+
+    inON = not na(time(timeframe.period, overnightSession, tz))
+    onStart = inON and not inON[1]
+    onEnd = not inON and inON[1]
+
+    if onStart
+        onHigh := high
+        onLow := low
+
+    if inON
+        onHigh := na(onHigh) ? high : math.max(onHigh, high)
+        onLow := na(onLow) ? low : math.min(onLow, low)
+
+    if onEnd
+        lockedHigh := onHigh
+        lockedLow := onLow
+        onHigh := na
+        onLow := na
+
+    [lockedHigh, lockedLow]
+
+[onHigh, onLow] = request.security(syminfo.tickerid, timeframe.period, f_overnight(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// 15m Opening Range: 06:30-06:45 PT
+orStart = timestamp(tz, year, month, dayofmonth, 6, 30)
+orEnd = timestamp(tz, year, month, dayofmonth, 6, 45)
+
+isORWindow = time >= orStart and time < orEnd
+isNewOR = time >= orStart and time[1] < orStart
+isOREnd = time >= orEnd and time[1] < orEnd
+
+var float orHighLive = na
+var float orLowLive = na
+var float orHigh = na
+var float orLow = na
+
+if isNewOR
+    orHighLive := high
+    orLowLive := low
+    orHigh := na
+    orLow := na
+
+if isORWindow
+    orHighLive := na(orHighLive) ? high : math.max(orHighLive, high)
+    orLowLive := na(orLowLive) ? low : math.min(orLowLive, low)
+
+if isOREnd
+    orHigh := orHighLive
+    orLow := orLowLive
+
+
+// =========================
+// HELPER FUNCTIONS
+// =========================
+body = math.abs(close - open)
+avgBody = ta.sma(math.abs(close - open), bodyLookback)
+avgVol = ta.sma(volume, volumeLookback)
+
+nearDist = nearLevelTicks * syminfo.mintick
+
+f_near(price, level) =>
+    not na(level) and math.abs(price - level) <= nearDist
+
+f_crossAbove(level) =>
+    not na(level) and close > level and close[1] <= level
+
+f_crossBelow(level) =>
+    not na(level) and close < level and close[1] >= level
+
+f_above(level) =>
+    not na(level) and close > level
+
+f_below(level) =>
+    not na(level) and close < level
+
+// Determine active broken level
+longBreakOR = f_crossAbove(orHigh)
+longBreakON = f_crossAbove(onHigh)
+longBreakPD = f_crossAbove(prevDayHigh)
+longBreakVWAP = close > vwap and close[1] <= vwap
+
+shortBreakOR = f_crossBelow(orLow)
+shortBreakON = f_crossBelow(onLow)
+shortBreakPD = f_crossBelow(prevDayLow)
+shortBreakVWAP = close < vwap and close[1] >= vwap
+
+longBreak = longBreakOR or longBreakON or longBreakPD or longBreakVWAP
+shortBreak = shortBreakOR or shortBreakON or shortBreakPD or shortBreakVWAP
+
+activeLongLevel =
+     longBreakOR ? orHigh :
+     longBreakON ? onHigh :
+     longBreakPD ? prevDayHigh :
+     longBreakVWAP ? vwap :
+     na
+
+activeShortLevel =
+     shortBreakOR ? orLow :
+     shortBreakON ? onLow :
+     shortBreakPD ? prevDayLow :
+     shortBreakVWAP ? vwap :
+     na
+
+activeLongName =
+     longBreakOR ? "ORH" :
+     longBreakON ? "ONH" :
+     longBreakPD ? "PDH" :
+     longBreakVWAP ? "VWAP" :
+     "NA"
+
+activeShortName =
+     shortBreakOR ? "ORL" :
+     shortBreakON ? "ONL" :
+     shortBreakPD ? "PDL" :
+     shortBreakVWAP ? "VWAP" :
+     "NA"
+
+// =========================
+// MULTI-INDEX ALIGNMENT
+// =========================
+f_context() =>
+    localVwap = ta.vwap(hlc3)
+    aboveVwap = close > localVwap
+    belowVwap = close < localVwap
+    slopeUp = localVwap > localVwap[3]
+    slopeDown = localVwap < localVwap[3]
+    [aboveVwap, belowVwap, slopeUp, slopeDown]
+
+[mesAbove, mesBelow, mesSlopeUp, mesSlopeDown] = request.security(mesSymbol, timeframe.period, f_context(), barmerge.gaps_off, barmerge.lookahead_off)
+[mnqAbove, mnqBelow, mnqSlopeUp, mnqSlopeDown] = request.security(mnqSymbol, timeframe.period, f_context(), barmerge.gaps_off, barmerge.lookahead_off)
+[m2kAbove, m2kBelow, m2kSlopeUp, m2kSlopeDown] = request.security(m2kSymbol, timeframe.period, f_context(), barmerge.gaps_off, barmerge.lookahead_off)
+
+longAlignedCount = (mesAbove ? 1 : 0) + (mnqAbove ? 1 : 0) + (m2kAbove ? 1 : 0)
+shortAlignedCount = (mesBelow ? 1 : 0) + (mnqBelow ? 1 : 0) + (m2kBelow ? 1 : 0)
+
+longSlopeCount = (mesSlopeUp ? 1 : 0) + (mnqSlopeUp ? 1 : 0) + (m2kSlopeUp ? 1 : 0)
+shortSlopeCount = (mesSlopeDown ? 1 : 0) + (mnqSlopeDown ? 1 : 0) + (m2kSlopeDown ? 1 : 0)
+
+// =========================
+// SCORES
+// =========================
+
+// Impulse score
+strongBody = body > avgBody * strongBodyMult
+strongVol = volume > avgVol * strongVolMult
+closeNearHigh = close >= high - (high - low) * 0.25
+closeNearLow = close <= low + (high - low) * 0.25
+
+longImpulseScore = (strongBody and strongVol and closeNearHigh) ? 2 : ((strongBody or strongVol) and close > open ? 1 : 0)
+shortImpulseScore = (strongBody and strongVol and closeNearLow) ? 2 : ((strongBody or strongVol) and close < open ? 1 : 0)
+
+// Alignment score
+longAlignmentScore = longAlignedCount == 3 and longSlopeCount >= 2 ? 2 : longAlignedCount >= 2 ? 1 : 0
+shortAlignmentScore = shortAlignedCount == 3 and shortSlopeCount >= 2 ? 2 : shortAlignedCount >= 2 ? 1 : 0
+
+// Acceptance score
+longAcceptedOR = not na(orHigh) and close > orHigh and close[1] > orHigh
+longAcceptedON = not na(onHigh) and close > onHigh and close[1] > onHigh
+longAcceptedPD = not na(prevDayHigh) and close > prevDayHigh and close[1] > prevDayHigh
+longAcceptedVWAP = close > vwap and close[1] > vwap
+
+shortAcceptedOR = not na(orLow) and close < orLow and close[1] < orLow
+shortAcceptedON = not na(onLow) and close < onLow and close[1] < onLow
+shortAcceptedPD = not na(prevDayLow) and close < prevDayLow and close[1] < prevDayLow
+shortAcceptedVWAP = close < vwap and close[1] < vwap
+
+longAcceptance = (longAcceptedOR or longAcceptedON or longAcceptedPD or longAcceptedVWAP) and close > vwap
+shortAcceptance = (shortAcceptedOR or shortAcceptedON or shortAcceptedPD or shortAcceptedVWAP) and close < vwap
+
+longAcceptanceScore = longAcceptance and vwapSlopeUp ? 2 : longAcceptance ? 1 : 0
+shortAcceptanceScore = shortAcceptance and vwapSlopeDown ? 2 : shortAcceptance ? 1 : 0
+
+// Pullback score
+var float lastLongLevel = na
+var string lastLongLevelName = "NA"
+var float lastShortLevel = na
+var string lastShortLevelName = "NA"
+var int lastLongBreakBar = na
+var int lastShortBreakBar = na
+
+if longBreak and inTradeWindow
+    lastLongLevel := activeLongLevel
+    lastLongLevelName := activeLongName
+    lastLongBreakBar := bar_index
+
+if shortBreak and inTradeWindow
+    lastShortLevel := activeShortLevel
+    lastShortLevelName := activeShortName
+    lastShortBreakBar := bar_index
+
+barsSinceLongBreak = na(lastLongBreakBar) ? na : bar_index - lastLongBreakBar
+barsSinceShortBreak = na(lastShortBreakBar) ? na : bar_index - lastShortBreakBar
+
+longPullbackToLevel = not na(lastLongLevel) and barsSinceLongBreak >= 1 and barsSinceLongBreak <= 8 and low <= lastLongLevel + nearDist and close >= lastLongLevel - nearDist
+shortPullbackToLevel = not na(lastShortLevel) and barsSinceShortBreak >= 1 and barsSinceShortBreak <= 8 and high >= lastShortLevel - nearDist and close <= lastShortLevel + nearDist
+
+lowVolPullback = volume < avgVol
+longPullbackScore = longPullbackToLevel and lowVolPullback ? 2 : longPullbackToLevel ? 1 : 0
+shortPullbackScore = shortPullbackToLevel and lowVolPullback ? 2 : shortPullbackToLevel ? 1 : 0
+
+// Location score
+longNearKey = f_near(close, orHigh) or f_near(close, onHigh) or f_near(close, prevDayHigh) or f_near(close, vwap)
+shortNearKey = f_near(close, orLow) or f_near(close, onLow) or f_near(close, prevDayLow) or f_near(close, vwap)
+
+longLocationScore = longNearKey ? 2 : close > vwap ? 1 : 0
+shortLocationScore = shortNearKey ? 2 : close < vwap ? 1 : 0
+
+// Continuation trigger
+longContinuation = longPullbackScore > 0 and close > high[1] and close > open
+shortContinuation = shortPullbackScore > 0 and close < low[1] and close < open
+
+longScore = longImpulseScore + longAlignmentScore + longAcceptanceScore + longPullbackScore + longLocationScore
+shortScore = shortImpulseScore + shortAlignmentScore + shortAcceptanceScore + shortPullbackScore + shortLocationScore
+
+// =========================
+// ALERT CONDITIONS
+// =========================
+level1Long = enableLevel1 and inTradeWindow and longBreak and longImpulseScore >= 1 and longAlignmentScore >= 1
+level1Short = enableLevel1 and inTradeWindow and shortBreak and shortImpulseScore >= 1 and shortAlignmentScore >= 1
+
+level2Long = enableLevel2 and inTradeWindow and longAcceptanceScore >= 1 and longAlignmentScore >= 1 and longImpulseScore >= 1
+level2Short = enableLevel2 and inTradeWindow and shortAcceptanceScore >= 1 and shortAlignmentScore >= 1 and shortImpulseScore >= 1
+
+level3Long = enableLevel3 and inTradeWindow and longScore >= minScoreLevel3 and longContinuation
+level3Short = enableLevel3 and inTradeWindow and shortScore >= minScoreLevel3 and shortContinuation
+
+// Cooldowns
+var int lastL1LongAlert = na
+var int lastL1ShortAlert = na
+var int lastL2LongAlert = na
+var int lastL2ShortAlert = na
+var int lastL3LongAlert = na
+var int lastL3ShortAlert = na
+
+cooldownBars = 3
+
+canAlert(lastBar) =>
+    na(lastBar) or bar_index - lastBar > cooldownBars
+
+// =========================
+// JSON BUILDER
+// =========================
+f_json(level, direction, score) =>
+    msg = 'LEVEL|DIR|SCORE|TICKER'
+    msg := str.replace(msg, 'LEVEL', str.tostring(level))
+    msg := str.replace(msg, 'DIR', direction)
+    msg := str.replace(msg, 'SCORE', str.tostring(score))
+    msg := str.replace(msg, 'TICKER', syminfo.ticker)
+    msg
+
+// =========================
+// FIRE ALERTS
+// =========================
+if level1Long and canAlert(lastL1LongAlert)
+    alert(f_json(1, "long", longScore), alert.freq_once_per_bar_close)
+    lastL1LongAlert := bar_index
+
+if level1Short and canAlert(lastL1ShortAlert)
+    alert(f_json(1, "short", shortScore), alert.freq_once_per_bar_close)
+    lastL1ShortAlert := bar_index
+
+if level2Long and canAlert(lastL2LongAlert)
+    alert(f_json(2, "long", longScore), alert.freq_once_per_bar_close)
+    lastL2LongAlert := bar_index
+
+if level2Short and canAlert(lastL2ShortAlert)
+    alert(f_json(2, "short", shortScore), alert.freq_once_per_bar_close)
+    lastL2ShortAlert := bar_index
+
+if level3Long and canAlert(lastL3LongAlert)
+    alert(f_json(3, "long", longScore), alert.freq_once_per_bar_close)
+    lastL3LongAlert := bar_index
+
+if level3Short and canAlert(lastL3ShortAlert)
+    alert(f_json(3, "short", shortScore), alert.freq_once_per_bar_close)
+    lastL3ShortAlert := bar_index
+
+// =========================
+// DEBUG TABLE
+// =========================
+var table t = table.new(position.bottom_right, 2, 8, border_width=1)
+
+if showDebug and barstate.islast
+    directionText = longScore > shortScore ? "LONG" : shortScore > longScore ? "SHORT" : "NEUTRAL"
+    scoreText = longScore > shortScore ? str.tostring(longScore) : str.tostring(shortScore)
+
+    headerBg = directionText == "LONG" ? color.new(color.green, 20) : directionText == "SHORT" ? color.new(color.red, 20) : color.new(color.gray, 50)
+
+    table.cell(t, 0, 0, "  " + directionText + "  ", text_color=color.white, bgcolor=headerBg)
+    table.cell(t, 1, 0, "  " + scoreText + "/10  ", text_color=color.white, bgcolor=headerBg)
+
+    table.cell(t, 0, 1, "Impulse", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 1, "  " + str.tostring(longScore > shortScore ? longImpulseScore : shortImpulseScore) + "  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 2, "Align", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 2, "  " + str.tostring(longScore > shortScore ? longAlignmentScore : shortAlignmentScore) + "  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 3, "Accept", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 3, "  " + str.tostring(longScore > shortScore ? longAcceptanceScore : shortAcceptanceScore) + "  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 4, "Pullback", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 4, "  " + str.tostring(longScore > shortScore ? longPullbackScore : shortPullbackScore) + "  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 5, "Location", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 5, "  " + str.tostring(longScore > shortScore ? longLocationScore : shortLocationScore) + "  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 6, "  Long Level  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 6, "  " + lastLongLevelName + "  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 7, "  Short Level  ", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 7, "  " + lastShortLevelName + "  ", text_color=color.white, bgcolor=color.new(color.gray, 80))

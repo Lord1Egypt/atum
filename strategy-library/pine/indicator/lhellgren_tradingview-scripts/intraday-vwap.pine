@@ -1,0 +1,149 @@
+//@version=6
+indicator(title="VWAP", shorttitle="VWAP", overlay=true)
+
+// === DISPLAY MODE ===
+vwapMode = input.string(
+     defval="VWAP",
+     title="VWAP Display Mode",
+     options=["VWAP", "Current Session VWAP"],
+     group="Display Settings"
+)
+
+// === VWAP SETTINGS ===
+hideonDWM = input(false, title="Hide VWAP on 1D or Above", group="VWAP Settings", display=display.none)
+
+anchor = input.string(
+     defval="Session",
+     title="Anchor Period",
+     options=["Session", "Week", "Month", "Quarter", "Year", "Decade", "Century", "Earnings", "Dividends", "Splits"],
+     group="VWAP Settings"
+)
+
+src = input.source(hlc3, title="Source", group="VWAP Settings", display=display.none)
+offset = input.int(0, title="Offset", group="VWAP Settings", display=display.none)
+
+// === CURRENT SESSION VWAP SETTINGS ===
+tz = "America/Los_Angeles"
+sessionInput = input.session("0630-1315", "RTH Session", group="Current Session VWAP Settings")
+
+// === BANDS SETTINGS ===
+BANDS_GROUP = "Bands Settings"
+
+calcModeInput = input.string(
+     "Standard Deviation",
+     "Bands Calculation Mode",
+     options=["Standard Deviation", "Percentage"],
+     group=BANDS_GROUP,
+     display=display.none
+)
+
+showBand_1 = input(true, title="", group=BANDS_GROUP, inline="band_1", display=display.none)
+bandMult_1 = input.float(1.0, title="Bands Multiplier #1", group=BANDS_GROUP, inline="band_1", step=0.5, minval=0, display=display.none)
+
+showBand_2 = input(false, title="", group=BANDS_GROUP, inline="band_2", display=display.none)
+bandMult_2 = input.float(2.0, title="Bands Multiplier #2", group=BANDS_GROUP, inline="band_2", step=0.5, minval=0, display=display.none)
+
+showBand_3 = input(false, title="", group=BANDS_GROUP, inline="band_3", display=display.none)
+bandMult_3 = input.float(3.0, title="Bands Multiplier #3", group=BANDS_GROUP, inline="band_3", step=0.5, minval=0, display=display.none)
+
+// === VOLUME CHECK ===
+cumVolume = ta.cum(volume)
+
+if barstate.islast and cumVolume == 0
+    runtime.error("No volume is provided by the data vendor.")
+
+// === ANCHOR PERIOD LOGIC ===
+isNewPeriod = switch anchor
+    "Earnings" =>
+        new_earnings_actual = request.earnings(syminfo.tickerid, earnings.actual, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+        new_earnings_standardized = request.earnings(syminfo.tickerid, earnings.standardized, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+        not na(new_earnings_actual) or not na(new_earnings_standardized)
+
+    "Dividends" =>
+        new_dividends = request.dividends(syminfo.tickerid, dividends.gross, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+        not na(new_dividends)
+
+    "Splits" =>
+        new_split = request.splits(syminfo.tickerid, splits.denominator, barmerge.gaps_on, barmerge.lookahead_on, ignore_invalid_symbol=true)
+        not na(new_split)
+
+    "Session" => timeframe.change("D")
+    "Week" => timeframe.change("W")
+    "Month" => timeframe.change("M")
+    "Quarter" => timeframe.change("3M")
+    "Year" => timeframe.change("12M")
+    "Decade" => timeframe.change("12M") and year % 10 == 0
+    "Century" => timeframe.change("12M") and year % 100 == 0
+    => false
+
+isEsdAnchor = anchor == "Earnings" or anchor == "Dividends" or anchor == "Splits"
+
+if na(src[1]) and not isEsdAnchor
+    isNewPeriod := true
+
+// === VWAP CALCULATION ===
+[_vwap, _stdevUpper, _] = ta.vwap(src, isNewPeriod, 1)
+
+stdevAbs = _stdevUpper - _vwap
+bandBasis = calcModeInput == "Standard Deviation" ? stdevAbs : _vwap * 0.01
+
+upperBandValue1 = _vwap + bandBasis * bandMult_1
+lowerBandValue1 = _vwap - bandBasis * bandMult_1
+
+upperBandValue2 = _vwap + bandBasis * bandMult_2
+lowerBandValue2 = _vwap - bandBasis * bandMult_2
+
+upperBandValue3 = _vwap + bandBasis * bandMult_3
+lowerBandValue3 = _vwap - bandBasis * bandMult_3
+
+// === CURRENT SESSION FILTER ===
+inSession = not na(time(timeframe.period, sessionInput, tz))
+
+anchorTime = last_bar_time
+
+anchorHour = hour(anchorTime, tz)
+anchorMin = minute(anchorTime, tz)
+
+anchorBeforeOpen = anchorHour < 6 or (anchorHour == 6 and anchorMin < 30)
+sessionAnchorTime = anchorBeforeOpen ? anchorTime - 24 * 60 * 60 * 1000 : anchorTime
+
+sessionYear = year(sessionAnchorTime, tz)
+sessionMonth = month(sessionAnchorTime, tz)
+sessionDay = dayofmonth(sessionAnchorTime, tz)
+
+barYear = year(time, tz)
+barMonth = month(time, tz)
+barDay = dayofmonth(time, tz)
+
+isActiveSessionDay = barYear == sessionYear and barMonth == sessionMonth and barDay == sessionDay
+
+showNormalVWAP = vwapMode == "VWAP"
+showCurrentSessionVWAP = vwapMode == "Current Session VWAP"
+
+showCurrentBar =
+     showCurrentSessionVWAP and
+     isActiveSessionDay and
+     inSession
+
+// === FINAL PLOTS ===
+normalVWAPPlot =
+     showNormalVWAP and not (hideonDWM and timeframe.isdwm) ? _vwap : na
+
+currentSessionVWAPPlot =
+     showCurrentBar ? _vwap : na
+
+plot(normalVWAPPlot, title="VWAP", color=#2962FF, offset=offset)
+plot(currentSessionVWAPPlot, title="Current Session VWAP", color=color.white, linewidth=2)
+
+// === BANDS ONLY FOR NORMAL VWAP MODE ===
+upperBand_1 = plot(showNormalVWAP and showBand_1 ? upperBandValue1 : na, title="Upper Band #1", color=color.green, offset=offset)
+lowerBand_1 = plot(showNormalVWAP and showBand_1 ? lowerBandValue1 : na, title="Lower Band #1", color=color.green, offset=offset)
+fill(upperBand_1, lowerBand_1, title="Bands Fill #1", color=color.new(color.green, 95))
+
+upperBand_2 = plot(showNormalVWAP and showBand_2 ? upperBandValue2 : na, title="Upper Band #2", color=color.olive, offset=offset)
+lowerBand_2 = plot(showNormalVWAP and showBand_2 ? lowerBandValue2 : na, title="Lower Band #2", color=color.olive, offset=offset)
+fill(upperBand_2, lowerBand_2, title="Bands Fill #2", color=color.new(color.olive, 95))
+
+upperBand_3 = plot(showNormalVWAP and showBand_3 ? upperBandValue3 : na, title="Upper Band #3", color=color.teal, offset=offset)
+lowerBand_3 = plot(showNormalVWAP and showBand_3 ? lowerBandValue3 : na, title="Lower Band #3", color=color.teal, offset=offset)
+fill(upperBand_3, lowerBand_3, title="Bands Fill #3", color=color.new(color.teal, 95))

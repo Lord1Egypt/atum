@@ -1,0 +1,30 @@
+//@version=6
+// RSI(2) pullback above the 200 SMA, with an ATR stop.
+// Long only. Buy when RSI(2) crosses below 10 while price is above the 200 SMA,
+// exit when RSI(2) crosses back above 70, stop at 3x ATR(14).
+// Backtested results across markets: https://wickcheck.com/blog/rsi-2-indices-vs-forex/
+strategy("RSI(2) pullback above 200 SMA, ATR stop", overlay = true, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, commission_type = strategy.commission.percent, commission_value = 0.01, slippage = 1)
+
+rsiLen   = input.int(2, "RSI length", minval = 1)
+entryLvl = input.float(10, "Enter when RSI crosses below")
+exitLvl  = input.float(70, "Exit when RSI crosses above")
+smaLen   = input.int(200, "Trend SMA length")
+atrLen   = input.int(14, "ATR length")
+atrMult  = input.float(3.0, "Stop distance (x ATR)", step = 0.5)
+
+r      = ta.rsi(close, rsiLen)
+trend  = ta.sma(close, smaLen)
+atr    = ta.atr(atrLen)
+entSig = ta.crossunder(r, entryLvl) and close > trend
+extSig = ta.crossover(r, exitLvl)
+
+var float stopPx = na
+if entSig and strategy.position_size == 0
+    stopPx := close - atrMult * atr
+    strategy.entry("Long", strategy.long)
+if strategy.position_size > 0
+    strategy.exit("Stop", "Long", stop = stopPx)
+if extSig
+    strategy.close("Long", comment = "RSI exit")
+
+plot(trend, "Trend SMA", color = color.gray)

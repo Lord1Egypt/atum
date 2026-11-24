@@ -1,0 +1,39 @@
+// Pine Script arrays: a rolling window example (v6)
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/arrays
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Average daily range (arrays)", overlay = false)
+
+days = input.int(14, "Days in the average", minval = 1, maxval = 250)
+
+// One value per completed day, oldest first
+var array<float> ranges = array.new<float>()
+var float dayHigh = na
+var float dayLow  = na
+
+bool newDay = timeframe.change("D")
+if newDay
+    // Store the day that just ended, then start the new one
+    if not na(dayHigh)
+        ranges.push(dayHigh - dayLow)
+        if ranges.size() > days
+            ranges.shift()
+    dayHigh := high
+    dayLow  := low
+else
+    dayHigh := math.max(nz(dayHigh, high), high)
+    dayLow  := math.min(nz(dayLow, low), low)
+
+bool  ready    = ranges.size() > 0
+float adr      = ready ? ranges.avg() : na
+float medRange = ready ? ranges.median() : na
+float widest   = ready ? ranges.max() : na
+float todayPct = adr > 0 ? (dayHigh - dayLow) / adr * 100 : na
+
+plot(todayPct, "Today's range, % of ADR", todayPct >= 100 ? color.orange : color.teal, style = plot.style_columns)
+hline(100, "100% of ADR", color.gray, hline.style_dashed)
+plot(adr, "ADR", display = display.data_window)
+plot(medRange, "Median daily range", display = display.data_window)
+plot(widest, "Widest day in the window", display = display.data_window)
+plot(ranges.size(), "Days stored", display = display.data_window)

@@ -1,0 +1,1501 @@
+//+------------------------------------------------------------------+
+//| Ichimoku M1+M2 KIHON / PO3 RANGE SCALPER                         |
+//| EXPERIMENTAL BUILD — not deployed. Magic 20260876.               |
+//|                                                                  |
+//| THE IDEA: a scalper that trades INSIDE a PO3 range and takes     |
+//| profit at a PO3 number, only at kihon suchi times of the day.    |
+//| Three gates, cheapest first, any one of them can veto:           |
+//|                                                                  |
+//|   1. TIME      — is the day's H1, M30 or M15 count on a kihon    |
+//|                  suchi number right now?                         |
+//|   2. STRUCTURE — are M1 AND M2 clear on price and chikou, and do |
+//|                  the higher timeframes (M5..H4) agree?           |
+//|   3. PRICE     — is there room inside the PO3 range to the next  |
+//|                  level, at an acceptable reward:risk?            |
+//|                                                                  |
+//| GATE 1 — KIHON TIME. Candles are counted from the DAY open on    |
+//| H1, M30 and M15, inclusive (the candle at the open is candle 1,  |
+//| the convention ported verbatim from po3-levels.mq5). The gate is |
+//| open while ANY enabled timeframe's count sits within InpKihonTol |
+//| of a kihon number (9, 17, 26, 33, 42, 51, 65, 76, 129, ...) that |
+//| a trading day can actually reach on that timeframe:              |
+//|   H1  (~24 a day)  — 9, 17                                       |
+//|   M30 (~48 a day)  — 9, 17, 26, 33, 42                           |
+//|   M15 (~96 a day)  — 9, 17, 26, 33, 42, 51, 65, 76               |
+//| The reach cap is §38's "26 trap" solved in general: a nearest-   |
+//| number test would otherwise open the gate on a number the day    |
+//| never gets to once a tolerance is set. With the default          |
+//| InpKihonTol = 0 the gate is open for the WHOLE candle carrying   |
+//| the number — one hour on H1, 30 minutes on M30, 15 on M15 — and  |
+//| a trade can come at any minute inside it, not only at the open.  |
+//| WEEK CLOCKS: the same count run from the WEEK open (the W1 bar,  |
+//| so candle 1 is the first candle that opens the week) on H4, H1   |
+//| and M30, capped at what five trading days reach:                 |
+//|   H4  (~30 a week)  — 9, 17, 26                                  |
+//|   H1  (~120 a week) — 9 ... 76                                   |
+//|   M30 (~240 a week) — 9 ... 226                                  |
+//| CONFLUENCE: InpKihonMinTFs (1-6) sets how many of the six clocks |
+//| (day H1/M30/M15, week H4/H1/M30) must be on a number at once.    |
+//| BREAKOUT: with InpBreakoutOnly the M1+M2 pair must TURN aligned  |
+//| inside the window (it was not aligned that way on the bar        |
+//| before), and each breakout is traded once. Off, any minute the   |
+//| chain is aligned inside the window will do.                      |
+//| Outside the windows the EA does not open trades. Running         |
+//| trades are never gated.                                          |
+//|                                                                  |
+//| GATE 2 — STRUCTURE (top-down). The family's CheckAlign on every  |
+//| timeframe from M1 up to InpAlignTop (default H4), all the same   |
+//| way: the last closed close beyond tenkan, kijun and the whole    |
+//| cloud, and the chikou (that close, Kijun bars back) beyond that  |
+//| bar's high/low and beyond tenkan, kijun and cloud as they stood  |
+//| there. M1 and M2 are the scalp trigger and are always checked;   |
+//| InpAlignTop = M2 drops the higher-timeframe confirmation.        |
+//| GATE 2b — ICHIMOKU STRUCTURE TARGET (InpStructTarget). When the  |
+//| chain holds from M1 only part of the way — at least up to        |
+//| InpStructMinTop (M5) — the first timeframe that fails is read    |
+//| for where price is HEADING instead of being a veto. Its nearest  |
+//| line ahead of price — tenkan, kijun, SSA or SSB — is the target  |
+//| (price is expected to bounce there). The road must be free: no   |
+//| tenkan, kijun, SSA or SSB of any timeframe above it (up to       |
+//| InpAlignTop) between entry and that line, and each of their      |
+//| chikous — and its own — able to travel the same distance without |
+//| a past candle or line in the way (InpStructChikou,               |
+//| InpChikouPathBars). When the line sits within                    |
+//| InpStructPO3TolPips of a PO3 number the PO3 number is the target |
+//| instead — the higher-probability case — and InpStructNeedPO3     |
+//| trades only those. Fully aligned chains keep the PO3 target.     |
+//| Both use the PO3 stop.                                           |
+//|                                                                  |
+//| M2 is REQUIRED here (unlike §39, which skipped it): the build is |
+//| defined by the M1+M2 trigger, so a broker that refuses an M2     |
+//| handle fails init loudly rather than trading a different build.  |
+//|                                                                  |
+//| GATE 3 — PO3 RANGE. The range is the cell between two adjacent   |
+//| multiples of 3^InpPO3Power (scaled as in po3-levels.mq5 — at     |
+//| scale 1 and power 2 that is a 9-dollar cell on gold). A long     |
+//| targets the level ABOVE price and is stopped beyond the level    |
+//| BELOW it; a short the reverse. So every trade lives inside one   |
+//| cell:                                                            |
+//|   TP = the level ahead,  InpTPBufferPips in front of it          |
+//|   SL = the level behind, InpSLBufferPips beyond it               |
+//|        (widened to InpMinSLPips when price hugs that level)      |
+//| The entry is skipped when the reward is under InpMinTPPips or    |
+//| the reward:risk under InpMinRR — price is too close to the level |
+//| it is heading into. Structure gives the direction; PO3 gives the |
+//| exit and the room veto. It does not fade levels.                 |
+//|                                                                  |
+//| EXITS (InpExitMode). EXIT_VPS, the default, is the VPS build's:  |
+//| the stop is the CLOUD — the trade closes when price touches the  |
+//| exit TF's cloud (the highest TF aligned at entry, or             |
+//| InpExitCloudTF) — and there is NO take profit: BE at +1 ATR,     |
+//| a chandelier 1 ATR behind the peak from +2 ATR (0.5 / 0.5 on an  |
+//| H1/H4 exit TF), and an 8 x ATR disaster stop on the order. The   |
+//| PO3/line target then only vetoes entries with too little room    |
+//| (InpMinTPPips). EXIT_TARGET is the earlier behaviour: TP at the  |
+//| target and SL at the PO3 stop, both on the order.                |
+//|                                                                  |
+//| PULLBACK ENTRY (InpEntryMode). H4 (+H1) aligned sets the trend;  |
+//| M1+M2 must have been aligned AGAINST it within the lookback, the |
+//| dip's extreme must reach a PO3 number or an M5-H1 line, and      |
+//| M1+M2 must turn back with the trend inside a kihon window. Hard  |
+//| stop beyond the dip; InpPBExit: TP at the swing extreme the dip  |
+//| came from (default), or no TP with BE + chandelier.              |
+//|                                                                  |
+//| ONE POSITION PER SYMBOL.                                         |
+//|                                                                  |
+//| RISK: InpRiskPct of equity against the stop — the distance to    |
+//| the exit cloud at entry (VPS mode, floored at InpMinSLPips), or  |
+//| the PO3 stop (target mode).                                      |
+//|                                                                  |
+//| WHAT THIS BUILD DELIBERATELY DOES NOT HAVE: the robustness pack, |
+//| the bias ladder, the cloud-bias gate and a margin cap. It is an  |
+//| experiment, not a hardened build. Do not deploy it to the VPS as |
+//| it stands.                                                       |
+//|                                                                  |
+//| Author: Neo Malesa                                               |
+//+------------------------------------------------------------------+
+#property strict
+#property version  "1.00"
+
+#include <Trade/Trade.mqh>
+
+//--- Input Parameters ---
+input string Symbols  = "GOLDm#";
+input int    Tenkan   = 9;
+input int    Kijun    = 26;
+input int    SenkouB  = 52;
+input int    Slippage = 30;
+
+input group  "Gate 1 - Kihon Suchi Time (day clocks from the day open, week clocks from the week open)"
+input bool   InpKihonGateEnabled = true; // Only open trades at kihon times (off = any hour)
+input bool   InpKihonH1  = true;         // Day: H1 count on a kihon number opens the gate
+input bool   InpKihonM30 = true;         // Day: M30 count on a kihon number opens the gate
+input bool   InpKihonM15 = true;         // Day: M15 count on a kihon number opens the gate
+input bool   InpKihonWeekH4  = true;     // Week: H4 count on a kihon number opens the gate
+input bool   InpKihonWeekH1  = true;     // Week: H1 count on a kihon number opens the gate
+input bool   InpKihonWeekM30 = true;     // Week: M30 count on a kihon number opens the gate
+input int    InpKihonTol = 0;            // Candles either side of the number (0 = on it exactly)
+input int    InpKihonMinTFs = 1;         // How many of the enabled clocks must be on a number at once (1-6)
+input bool   InpBreakoutOnly = true;     // M1+M2 must TURN aligned inside the kihon window (one trade per breakout)
+
+input group  "Entry Mode"
+enum ENUM_ENTRY_MODE
+{
+   ENTRY_BREAKOUT = 0,   // Breakout: the chain from M1 up (PO3 / line targets)
+   ENTRY_PULLBACK = 1,   // Pullback: M1+M2 dip against the H4 trend into a level, then turn back
+   ENTRY_BOTH     = 2    // Both (pullback checked first)
+};
+input ENUM_ENTRY_MODE InpEntryMode = ENTRY_BREAKOUT; // Which entries to take
+
+input group  "Pullback Entry (ENTRY_PULLBACK / ENTRY_BOTH)"
+input bool   InpPBNeedH1        = true;  // H1 must be aligned with H4 as well
+input int    InpPBLookbackMins  = 30;    // M1+M2 must have been aligned AGAINST the trend within this many minutes
+input double InpPBLevelTolPips  = 15.0;  // The pullback extreme must come within this of a level
+input double InpPBMaxSLPips     = 150.0; // Skip when the swing stop is further than this
+input ENUM_TIMEFRAMES InpPBManageTF = PERIOD_M15; // ATR for the BE / chandelier on pullback trades (trail exit)
+enum ENUM_PB_EXIT
+{
+   PB_EXIT_SWING = 0,   // Swing: TP at the swing extreme the dip came from, swing stop, nothing else
+   PB_EXIT_TRAIL = 1    // Trail: no TP, BE + chandelier on the InpPBManageTF ATR
+};
+input ENUM_PB_EXIT InpPBExit    = PB_EXIT_SWING; // How a pullback trade is closed
+input int    InpPBSwingBars     = 60;    // Swing target = the extreme of the last this many M1 bars
+input double InpPBMinRR         = 0.0;   // Skip when swing reward:risk is below this (0 = off)
+
+input group  "Gate 2 - Alignment"
+input ENUM_TIMEFRAMES InpAlignTop = PERIOD_H4; // Highest timeframe that must agree (M2 = M1+M2 only)
+
+input group  "Gate 2b - Ichimoku Structure Target"
+input bool   InpStructTarget   = true;        // Trade a partial breakout toward the next TF's nearest line
+input ENUM_TIMEFRAMES InpStructMinTop = PERIOD_M5; // The breakout must reach at least this TF (M1+M2+..+this aligned)
+input bool   InpStructChikou   = true;        // The chikou of the target TF and every TF above must be free too
+input int    InpChikouPathBars = 3;           // Chikou path checked over this many bars (from its position toward now)
+input double InpStructPO3TolPips = 10.0;      // Target line within this of a PO3 number -> the PO3 number is the target
+input bool   InpStructNeedPO3  = false;       // Only trade structure targets whose line sits on a PO3 number
+
+input group  "Gate 3 - PO3 Range"
+input double InpPO3Scale     = 1.0;   // Scale divisor (1 = whole numbers, 100 = workbook 2dp) — as the indicator
+input int    InpPO3Power     = 2;     // Range size = 3^power (2 = 9, 3 = 27, 4 = 81)
+input double InpPipPoints    = 10.0;  // Points per pip (2-decimal gold = 10; 3-decimal gold = 100)
+input double InpTPBufferPips = 5.0;   // TP sits this far IN FRONT of the target level
+input double InpSLBufferPips = 10.0;  // SL sits this far BEYOND the level behind price
+input double InpMinSLPips    = 20.0;  // Stop never closer than this
+input double InpMinTPPips    = 30.0;  // Skip when the TP is closer than this (30 pips = 4000 -> 4003 on gold)
+input double InpMinRR        = 1.0;   // Skip when reward:risk is below this
+
+input group  "Exits"
+enum ENUM_EXIT_MODE
+{
+   EXIT_VPS    = 0,   // VPS: kumo-touch exit, no TP, BE + chandelier, disaster stop
+   EXIT_TARGET = 1    // Target: TP at the PO3/line target, SL at the PO3 stop
+};
+input ENUM_EXIT_MODE  InpExitMode    = EXIT_VPS;       // How a trade is closed
+input ENUM_TIMEFRAMES InpExitCloudTF = PERIOD_CURRENT; // VPS exit cloud (current = the highest aligned TF at entry, the VPS rule)
+input int    InpATRPeriod        = 14;   // ATR period (the exit TF's ATR)
+input double InpBEProfitATR      = 1.0;  // BE arms once profit >= this x ATR (exit TF below H1)
+input double InpBEProfitH1H4     = 0.5;  // BE arms once profit >= this x ATR (exit TF H1/H4)
+input int    InpBECoverPoints    = 15;   // Points beyond entry for the BE stop (covers spread)
+input double InpSpikeLockATR     = 2.0;  // Chandelier arms once profit >= this x ATR (exit TF below H1)
+input double InpTrailActivateATR = 0.5;  // Chandelier arms once profit >= this x ATR (exit TF H1/H4)
+input double InpTrailATR         = 1.0;  // Trail distance behind the peak, x ATR
+input double InpDisasterATRMult  = 8.0;  // Hard disaster stop at entry, x ATR (0 = none)
+
+input group  "Risk & Filters"
+input double InpRiskPct         = 1.0;  // % of equity lost if the stop is hit (VPS mode: the exit cloud at entry)
+input double InpFixedLots       = 0.10; // Fallback lots (sizing data unavailable)
+input int    InpMaxSpreadPoints = 60;   // Max spread in points to allow entry (0 = no limit)
+
+//--- Constants and Global Variables ---
+#define MAX_SYMS 60
+#define TFS      7      // M1, M2, M5, M15, M30, H1, H4 — the alignment stack
+
+ENUM_TIMEFRAMES tfs[TFS]    = { PERIOD_M1, PERIOD_M2, PERIOD_M5, PERIOD_M15, PERIOD_M30, PERIOD_H1, PERIOD_H4 };
+string          tfName[TFS] = { "M1", "M2", "M5", "M15", "M30", "H1", "H4" };
+
+int      ich[MAX_SYMS][TFS];
+string   syms[MAX_SYMS];
+int      symsCount = 0;
+datetime lastM1bar[MAX_SYMS];
+int      state[MAX_SYMS];        // 0 = flat, 1 = long, -1 = short
+int      pairPrev[MAX_SYMS];     // M1+M2 direction on the previous bar (-99 = not read yet)
+datetime brkTime[MAX_SYMS];      // open time of the bar the last M1+M2 breakout closed on
+int      brkDir[MAX_SYMS];
+bool     brkUsed[MAX_SYMS];      // that breakout has been traded
+double   slPrice[MAX_SYMS];      // the stop placed at entry — the self-heal target
+double   tpPrice[MAX_SYMS];
+int      atrH[MAX_SYMS][TFS];    // ATR per timeframe — the exit TF's is used
+int      exitIdx[MAX_SYMS];      // VPS mode: the timeframe whose cloud closes the trade (-1 = flat)
+double   entryPx[MAX_SYMS];      // VPS mode: entry price (BE and trail arming, disaster anchor)
+double   peakHi[MAX_SYMS];       // VPS mode: highest high since entry (long chandelier)
+double   peakLo[MAX_SYMS];       // VPS mode: lowest low since entry (short chandelier)
+bool     beDone[MAX_SYMS];       // VPS mode: BE already moved (one-shot)
+bool     pbTrade[MAX_SYMS];      // the open trade is a pullback (swing stop, no cloud exit)
+datetime pairSeen[MAX_SYMS][2];  // last bar M1+M2 were aligned long [0] / short [1]
+int      pbManageIdx   = 3;      // InpPBManageTF as an index
+int      exitFixedIdx  = -1;     // InpExitCloudTF as an index, -1 = the highest aligned TF
+int      lastMinuteKey = -1;
+int      alignTopIdx   = TFS - 1;
+int      structMinIdx  = 2;
+
+int MAGIC = 20260876;   // experimental kihon/PO3 range scalper (nothing else uses this)
+
+CTrade trade;
+
+//==============================================================
+// Pips — InpPipPoints * SYMBOL_POINT, resolved per symbol.
+//==============================================================
+
+double PipPrice(const int s)
+{
+   return InpPipPoints * SymbolInfoDouble(syms[s], SYMBOL_POINT);
+}
+
+//==============================================================
+// KIHON SUCHI CORE
+//
+// KihonCount is ported verbatim from experiments/po3-levels.mq5
+// (via §38), so the EA and the chart agree on where a count stands:
+// inclusive counting, Bars() over [anchor, now] so a candle before
+// the anchor is never in the window.
+//==============================================================
+
+#define KIHON_COUNT     12
+#define KIHON_SPAN_CAP  20000
+const int Kihon[KIHON_COUNT] = { 9, 17, 26, 33, 42, 51, 65, 76, 129, 172, 226, 257 };
+
+int KihonCount(const string sym, const ENUM_TIMEFRAMES tf, const datetime anchor)
+{
+   if(anchor <= 0)
+      return(0);
+
+   datetime cur = iTime(sym, tf, 0);
+   if(cur == 0)
+      return(0);                       // history not ready on this timeframe
+   if(anchor >= cur)
+      return(1);                       // anchor falls inside the developing candle
+
+   int secs = PeriodSeconds(tf);
+   if(secs > 0 && ((long)TimeCurrent() - (long)anchor) / secs > KIHON_SPAN_CAP)
+      return(-1);
+
+   int n = Bars(sym, tf, anchor, TimeCurrent());
+   return(n > 0 ? n : 0);
+}
+
+//--- The kihon number the count n is on (within tol), or 0. Only numbers a
+//--- trading day can reach on this timeframe are considered — see the header
+//--- for why: a tolerance would otherwise open the gate on a number past the
+//--- end of the day (§38's "26 trap" on H1).
+//--- 'span' is the length of the counting period in seconds: a day for the
+//--- day clocks, five trading days for the week clocks.
+int KihonHit(const int n, const ENUM_TIMEFRAMES tf, const int tol, const int span)
+{
+   int reach = span / PeriodSeconds(tf);
+   for(int i = 0; i < KIHON_COUNT; i++)
+   {
+      if(Kihon[i] > reach) break;
+      if(MathAbs(n - Kihon[i]) <= tol) return(Kihon[i]);
+   }
+   return(0);
+}
+
+//--- One timeframe's reading, appended to info: "M15:33*" on the number,
+//--- "M15:34(33)*" off it by the tolerance, "M15:28" when not on one. On a
+//--- hit, 'start' is the open of the first candle of that timeframe's window
+//--- (candle K - tol), so a trade anywhere inside the window can be dated
+//--- against it — the gate covers the whole candle, not just its open.
+bool KihonTfOK(const string sym, const ENUM_TIMEFRAMES tf, const string name,
+               const datetime anchor, const int span, string &info, datetime &start)
+{
+   start = 0;
+   int c = (anchor > 0) ? KihonCount(sym, tf, anchor) : 0;
+   if(c <= 0)
+   {
+      info += " " + name + ":--";
+      return(false);                   // unknown count does not open the gate
+   }
+   int tol = (int)MathMax(0, MathMin(8, InpKihonTol));
+   int k   = KihonHit(c, tf, tol, span);
+   info += " " + name + ":" + IntegerToString(c) +
+           ((k > 0 && k != c) ? "(" + IntegerToString(k) + ")" : "") +
+           (k > 0 ? "*" : "");
+   if(k <= 0) return(false);
+
+   int first = (int)MathMax(1, k - tol);
+   start = iTime(sym, tf, 0) - (datetime)((c - first) * PeriodSeconds(tf));
+   return(true);
+}
+
+#define DAY_SPAN   86400
+#define WEEK_SPAN  (5 * 86400)   // five trading days: H4 ~30, H1 ~120, M30 ~240
+
+//+------------------------------------------------------------------+
+//| Gate 1. How many kihon clocks are on a number right now (the     |
+//| CONFLUENCE), and since when. Six clocks:                         |
+//|   day  — H1, M30, M15 counted from the day open (D1 bar)         |
+//|   week — H4, H1, M30 counted from the week open (W1 bar), so     |
+//|          candle 1 is the first candle that opens the week        |
+//| The gate is open when the count reaches InpKihonMinTFs.          |
+//| 'winStart' is the latest of the hit clocks' window starts — the  |
+//| moment the current confluence began — which is what a breakout   |
+//| is dated against. 'info' records every reading, starred where it |
+//| hit, with the count: "H1:9* M30:17* M15:33* wH4:17* wH1:65 ... x4". |
+//+------------------------------------------------------------------+
+int KihonConfluence(const int s, string &info, datetime &winStart)
+{
+   info = ""; winStart = 0;
+   if(!InpKihonGateEnabled) { info = "off"; return(99); }
+
+   string   sym     = syms[s];
+   datetime dayOpen = iTime(sym, PERIOD_D1, 0);
+   datetime wkOpen  = iTime(sym, PERIOD_W1, 0);
+
+   int n = 0;
+   datetime st;
+   if(InpKihonH1      && KihonTfOK(sym, PERIOD_H1,  "H1",   dayOpen, DAY_SPAN,  info, st)) { n++; winStart = MathMax(winStart, st); }
+   if(InpKihonM30     && KihonTfOK(sym, PERIOD_M30, "M30",  dayOpen, DAY_SPAN,  info, st)) { n++; winStart = MathMax(winStart, st); }
+   if(InpKihonM15     && KihonTfOK(sym, PERIOD_M15, "M15",  dayOpen, DAY_SPAN,  info, st)) { n++; winStart = MathMax(winStart, st); }
+   if(InpKihonWeekH4  && KihonTfOK(sym, PERIOD_H4,  "wH4",  wkOpen,  WEEK_SPAN, info, st)) { n++; winStart = MathMax(winStart, st); }
+   if(InpKihonWeekH1  && KihonTfOK(sym, PERIOD_H1,  "wH1",  wkOpen,  WEEK_SPAN, info, st)) { n++; winStart = MathMax(winStart, st); }
+   if(InpKihonWeekM30 && KihonTfOK(sym, PERIOD_M30, "wM30", wkOpen,  WEEK_SPAN, info, st)) { n++; winStart = MathMax(winStart, st); }
+   info += " x" + IntegerToString(n);
+   StringTrimLeft(info);
+   return(n);
+}
+
+//==============================================================
+// Breakout tracking — the moment M1 and M2 TURN aligned.
+//
+// Read on every closed M1 bar, in or out of a kihon window and in or
+// out of a trade, so the EA always knows when the current M1+M2
+// alignment began. A breakout is the bar on which the pair goes from
+// anything else to aligned one way (flat -> long, or short -> long).
+// With InpBreakoutOnly the entry needs that bar to fall INSIDE the
+// current kihon window, and each breakout is traded at most once.
+//==============================================================
+
+void TrackBreakout(const int s, const datetime barTime)
+{
+   int a1   = CheckAlign(s, 0);
+   int pair = (a1 != 0 && CheckAlign(s, 1) == a1) ? a1 : 0;
+
+   if(pair ==  1) pairSeen[s][0] = barTime;
+   if(pair == -1) pairSeen[s][1] = barTime;
+
+   if(pairPrev[s] != -99 && pair != 0 && pair != pairPrev[s])
+   {
+      brkTime[s] = barTime;
+      brkDir[s]  = pair;
+      brkUsed[s] = false;
+   }
+   pairPrev[s] = pair;
+}
+
+//==============================================================
+// PO3 CORE — levels are m x 3^n in a scaled integer space
+// (price = raw / scale), as in po3-levels.mq5 and §38. A level's
+// strength is 3^v3(raw); the levels of power >= k are exactly the
+// multiples of 3^k, so the range around price is one division.
+//==============================================================
+
+long PO3Step(const int power)
+{
+   long v = 1;
+   int  n = (power < 0) ? 0 : (power > 20 ? 20 : power);
+   for(int i = 0; i < n; i++)
+      v *= 3;
+   return(v);
+}
+
+//--- How many times raw divides by 3 — the exponent of the strongest PO3
+//--- level that lands on it, capped at 9 (19683) like the indicator's top grid.
+int PO3Power(long raw)
+{
+   if(raw <= 0)
+      return(0);
+   int n = 0;
+   while(n < 9 && (raw % 3) == 0)
+   {
+      raw /= 3;
+      n++;
+   }
+   return(n);
+}
+
+string PO3Tag(const int s, const double lvl, const int power)
+{
+   return(DoubleToString(lvl, (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS)) +
+          " (" + IntegerToString((int)PO3Step(power)) + ")");
+}
+
+struct RangePlan
+{
+   double target;   // the PO3 level ahead of price
+   double behind;   // the PO3 level behind price
+   int    tgtPow;   // the target level's real power
+   string tgtName;  // "4491.00 (9)" for a PO3 target, "M15 SSB 4488.20" for a structure one
+   double tp;
+   double sl;
+   double rr;
+   string why;      // reason for a veto, empty when the plan is good
+};
+
+//--- The PO3 levels either side of entry: the next multiple of the step
+//--- STRICTLY beyond entry in the trade's direction (so a price sitting on a
+//--- level looks to the next one), and the level one step behind it.
+bool PO3Levels(const int dir, const double entry, double &ahead, double &behind, int &power)
+{
+   long   step   = PO3Step(InpPO3Power);
+   double scaled = entry * InpPO3Scale;
+   long   m      = (dir == 1) ? (long)MathFloor(scaled / (double)step + 1e-9) + 1
+                              : (long)MathCeil (scaled / (double)step - 1e-9) - 1;
+   long   raw    = m * step;
+   if(raw <= 0 || raw - dir * step <= 0) return(false);
+
+   ahead  = (double)raw / InpPO3Scale;
+   behind = (double)(raw - dir * step) / InpPO3Scale;
+   power  = PO3Power(raw);
+   return(true);
+}
+
+//+------------------------------------------------------------------+
+//| Gate 3. Turn a target into an order, and veto it when there is   |
+//| no room. The TP sits InpTPBufferPips in front of p.target; the   |
+//| stop is always the PO3 range stop — InpSLBufferPips beyond the   |
+//| PO3 level behind price, widened to InpMinSLPips — whichever kind |
+//| of target the trade has. 'entry' is the price the order would    |
+//| fill at (ask for a long, bid for a short).                       |
+//+------------------------------------------------------------------+
+bool FinishPlan(const int s, const int dir, const double entry, RangePlan &p)
+{
+   int    d   = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+   double pip = PipPrice(s);
+
+   p.tp = NormalizeDouble(p.target - dir * InpTPBufferPips * pip, d);
+
+   //--- VPS exits: the target is a ROOM check only. The trade needs the
+   //--- minimum move to its target, but carries no TP and no PO3 stop — it
+   //--- runs until the exit cloud is touched or the trail takes it.
+   if(InpExitMode == EXIT_VPS)
+   {
+      double room = dir * (p.tp - entry);
+      if(room < InpMinTPPips * pip)
+      {
+         p.why = StringFormat("no room — %.1f pips to %s", room / pip, p.tgtName);
+         return(false);
+      }
+      p.tp = 0.0; p.sl = 0.0; p.rr = 0.0;
+      return(true);
+   }
+
+   p.sl = p.behind - dir * InpSLBufferPips * pip;
+   if(dir * (entry - p.sl) < InpMinSLPips * pip)
+      p.sl = entry - dir * InpMinSLPips * pip;
+   p.sl = NormalizeDouble(p.sl, d);
+
+   double reward = dir * (p.tp - entry);
+   double risk   = dir * (entry - p.sl);
+   if(risk <= 0) { p.why = "stop on the wrong side"; return(false); }
+   p.rr = reward / risk;
+
+   if(reward < InpMinTPPips * pip)
+   {
+      p.why = StringFormat("no room — %.1f pips to %s", reward / pip, p.tgtName);
+      return(false);
+   }
+   if(p.rr < InpMinRR)
+   {
+      p.why = StringFormat("rr %.2f < %.2f to %s", p.rr, InpMinRR, p.tgtName);
+      return(false);
+   }
+
+   double minDist = SymbolInfoInteger(syms[s], SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(syms[s], SYMBOL_POINT);
+   double bid     = SymbolInfoDouble(syms[s], SYMBOL_BID);
+   double ask     = SymbolInfoDouble(syms[s], SYMBOL_ASK);
+   bool okSL = (dir == 1) ? (p.sl < bid - minDist) : (p.sl > ask + minDist);
+   bool okTP = (dir == 1) ? (p.tp > ask + minDist) : (p.tp < bid - minDist);
+   if(!okSL || !okTP) { p.why = "inside the broker's minimum stop distance"; return(false); }
+   return(true);
+}
+
+//--- The full-alignment target: the PO3 level ahead of price.
+bool PlanRange(const int s, const int dir, const double entry, RangePlan &p)
+{
+   p.target = 0; p.behind = 0; p.tgtPow = 0; p.tgtName = ""; p.tp = 0; p.sl = 0; p.rr = 0; p.why = "";
+   if(!PO3Levels(dir, entry, p.target, p.behind, p.tgtPow)) { p.why = "no PO3 level ahead"; return(false); }
+   p.tgtName = PO3Tag(s, p.target, p.tgtPow);
+   return(FinishPlan(s, dir, entry, p));
+}
+
+//==============================================================
+// Initialization and Deinitialization
+//==============================================================
+
+int ParseSymbols(string list)
+{
+   string parts[];
+   int n = StringSplit(list, ',', parts);
+   int cnt = 0;
+   for(int i = 0; i < n && cnt < MAX_SYMS; i++)
+   {
+      string sym = parts[i];
+      StringTrimLeft(sym);
+      StringTrimRight(sym);
+      if(StringLen(sym) == 0) continue;
+      bool dup = false;
+      for(int j = 0; j < cnt; j++)
+         if(syms[j] == sym) { dup = true; break; }
+      if(dup) continue;
+      if(SymbolSelect(sym, true)) syms[cnt++] = sym;
+   }
+   return cnt;
+}
+
+int OnInit()
+{
+   symsCount = ParseSymbols(Symbols);
+   if(symsCount <= 0) return(INIT_FAILED);
+
+   alignTopIdx = -1;
+   for(int t = 1; t < TFS; t++)
+      if(tfs[t] == InpAlignTop) alignTopIdx = t;
+   if(alignTopIdx < 1)
+   {
+      Print("Alignment: InpAlignTop must be one of M2, M5, M15, M30, H1, H4. Aborting.");
+      return(INIT_FAILED);
+   }
+   structMinIdx = -1;
+   for(int t = 1; t < TFS; t++)
+      if(tfs[t] == InpStructMinTop) structMinIdx = t;
+   if(InpStructTarget && structMinIdx < 1)
+   {
+      Print("Structure target: InpStructMinTop must be one of M2, M5, M15, M30, H1, H4. Aborting.");
+      return(INIT_FAILED);
+   }
+   if(InpKihonMinTFs < 1 || InpKihonMinTFs > 6)
+   {
+      Print("Kihon gate: InpKihonMinTFs must be 1-6. Aborting.");
+      return(INIT_FAILED);
+   }
+   pbManageIdx = -1;
+   for(int t = 0; t < TFS; t++)
+      if(tfs[t] == InpPBManageTF) pbManageIdx = t;
+   if(InpEntryMode != ENTRY_BREAKOUT && pbManageIdx < 0)
+   {
+      Print("Pullback: InpPBManageTF must be one of M1..H4. Aborting.");
+      return(INIT_FAILED);
+   }
+   exitFixedIdx = -1;
+   if(InpExitCloudTF != PERIOD_CURRENT)
+   {
+      for(int t = 0; t < TFS; t++)
+         if(tfs[t] == InpExitCloudTF) exitFixedIdx = t;
+      if(exitFixedIdx < 0)
+      {
+         Print("Exits: InpExitCloudTF must be CURRENT or one of M1..H4. Aborting.");
+         return(INIT_FAILED);
+      }
+   }
+   if(InpPipPoints <= 0 || InpPO3Scale <= 0 || InpPO3Power < 0 || InpPO3Power > 9)
+   {
+      Print("PO3: InpPipPoints and InpPO3Scale must be positive and InpPO3Power 0-9. Aborting.");
+      return(INIT_FAILED);
+   }
+
+   for(int s = 0; s < symsCount; s++)
+   {
+      lastM1bar[s] = 0;
+      pairPrev[s]  = -99;
+      brkTime[s]   = 0;
+      brkDir[s]    = 0;
+      brkUsed[s]   = true;
+      state[s]     = 0;
+      slPrice[s]   = 0.0;
+      tpPrice[s]   = 0.0;
+      exitIdx[s]   = -1;
+      pbTrade[s]   = false;
+      pairSeen[s][0] = 0;
+      pairSeen[s][1] = 0;
+
+      for(int t = 0; t < TFS; t++)
+      {
+         atrH[s][t] = iATR(syms[s], tfs[t], InpATRPeriod);
+         if(atrH[s][t] == INVALID_HANDLE) return(INIT_FAILED);
+         ich[s][t] = iIchimoku(syms[s], tfs[t], Tenkan, Kijun, SenkouB);
+         if(ich[s][t] == INVALID_HANDLE)
+         {
+            Print(syms[s] + " refused an " + tfName[t] + " Ichimoku handle" +
+                  (t == 1 ? " — this broker does not serve M2, which the scalp trigger needs" : "") +
+                  ". Aborting.");
+            return(INIT_FAILED);
+         }
+      }
+
+      double pip  = PipPrice(s);
+      int    d    = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+      double step = (double)PO3Step(InpPO3Power) / InpPO3Scale;
+      PrintFormat("PO3 range: %s — cell %s (3^%d), 1 pip = %s | TP buffer %.1f, SL buffer %.1f, "
+                  "min SL %.1f, min TP %.1f pips, min rr %.2f",
+                  syms[s], DoubleToString(step, d), InpPO3Power, DoubleToString(pip, d),
+                  InpTPBufferPips, InpSLBufferPips, InpMinSLPips, InpMinTPPips, InpMinRR);
+   }
+
+   string chain = "M1";
+   for(int t = 1; t <= alignTopIdx; t++) chain += "+" + tfName[t];
+   Print("Alignment: " + chain + " all agreeing -> PO3 target.");
+   if(InpStructTarget)
+      Print("Structure target: ON — M1.." + tfName[structMinIdx] + " (at least) aligned with the next TF "
+            "heading for its nearest line (tenkan/kijun/SSA/SSB) -> line target, road free up to " + tfName[alignTopIdx] +
+            (InpStructChikou ? " (price and chikou)." : " (price only)."));
+
+   if(InpKihonGateEnabled)
+      PrintFormat("Kihon gate: ON — entries anywhere inside a candle where at least %d of the clocks "
+                  "[day%s%s%s | week%s%s%s] are within %d of a reachable kihon number.", InpKihonMinTFs,
+                  InpKihonH1 ? " H1" : "", InpKihonM30 ? " M30" : "", InpKihonM15 ? " M15" : "",
+                  InpKihonWeekH4 ? " H4" : "", InpKihonWeekH1 ? " H1" : "", InpKihonWeekM30 ? " M30" : "",
+                  InpKihonTol);
+   else
+      Print("Kihon gate: OFF — entries run at any hour.");
+   Print(InpBreakoutOnly ? "Entry: BREAKOUT — M1+M2 must turn aligned inside the kihon window, one trade per breakout."
+                         : "Entry: STATE — any minute the chain is aligned inside the kihon window.");
+
+   if(InpEntryMode != ENTRY_BREAKOUT)
+      PrintFormat("Pullback entry: ON — H4%s aligned, M1+M2 aligned against it within %d min, the dip "
+                  "within %.0f pips of a PO3 number or an M5-H1 line, then M1+M2 turn back inside a kihon "
+                  "window. Swing stop (max %.0f pips), no TP, BE + chandelier on %s ATR.",
+                  InpPBNeedH1 ? "+H1" : "", InpPBLookbackMins, InpPBLevelTolPips, InpPBMaxSLPips,
+                  tfName[pbManageIdx]);
+   if(InpEntryMode == ENTRY_PULLBACK)
+      Print("Breakout entries: OFF.");
+   if(InpExitMode == EXIT_VPS)
+      Print("Exits: VPS — close on a touch of the " +
+            (exitFixedIdx < 0 ? string("highest aligned TF's") : tfName[exitFixedIdx]) +
+            " cloud, no TP; BE, chandelier trail and an " + DoubleToString(InpDisasterATRMult, 1) +
+            "xATR disaster stop as in the VPS build. Risk is priced on the distance to that cloud.");
+   else
+      Print("Exits: TARGET — TP at the PO3/line target, SL at the PO3 stop, both on the order.");
+
+   trade.SetDeviationInPoints(Slippage);
+   trade.SetExpertMagicNumber(MAGIC);
+   SyncStateFromPositions();
+   return(INIT_SUCCEEDED);
+}
+
+void OnDeinit(const int reason)
+{
+   for(int s = 0; s < symsCount; s++)
+      for(int t = 0; t < TFS; t++)
+      {
+         if(ich[s][t]  != INVALID_HANDLE) IndicatorRelease(ich[s][t]);
+         if(atrH[s][t] != INVALID_HANDLE) IndicatorRelease(atrH[s][t]);
+      }
+}
+
+//==============================================================
+// Position State — one position per symbol, found by magic.
+// A restart recovers the direction from the position; the stop
+// to heal to is the position's own, or, if that is already gone,
+// the range stop rebuilt from the open price.
+//==============================================================
+
+bool SymbolTicket(const int s, ulong &ticket)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != syms[s]) continue;
+      if((int)PositionGetInteger(POSITION_MAGIC) != MAGIC) continue;
+      return(true);
+   }
+   return(false);
+}
+
+void SyncStateFromPositions()
+{
+   for(int s = 0; s < symsCount; s++)
+   {
+      ulong ticket;
+      if(!SymbolTicket(s, ticket))
+      {
+         state[s] = 0; slPrice[s] = 0.0; tpPrice[s] = 0.0; exitIdx[s] = -1; pbTrade[s] = false;
+         continue;
+      }
+      int dir = ((int)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      state[s] = dir;
+      bool isPB = (StringFind(PositionGetString(POSITION_COMMENT), " PB ") >= 0);
+      if(InpExitMode == EXIT_VPS || isPB)
+      {
+         if(exitIdx[s] < 0) { RebuildVpsState(s, dir); pbTrade[s] = isPB; }
+         continue;
+      }
+      if(slPrice[s] == 0.0)
+      {
+         double curSL = PositionGetDouble(POSITION_SL);
+         tpPrice[s]   = PositionGetDouble(POSITION_TP);
+         if(curSL > 0.0)
+            slPrice[s] = curSL;
+         else
+         {
+            RangePlan p;
+            PlanRange(s, dir, PositionGetDouble(POSITION_PRICE_OPEN), p);
+            slPrice[s] = p.sl;
+         }
+      }
+   }
+}
+
+//==============================================================
+// Alignment Check — identical to the family's CheckAlign: price
+// and chikou both above/below tenkan, kijun, and cloud on one
+// timeframe. Returns 1 (bullish), -1 (bearish), 0 (none).
+//==============================================================
+
+int CheckAlign(const int s, const int tfIdx)
+{
+   ENUM_TIMEFRAMES tf = tfs[tfIdx];
+
+   int sh      = 1;              // last closed bar
+   int chShift = sh + Kijun;     // chikou's chart position for bar sh (Kijun bars back)
+
+   MqlRates rt[];
+   if(CopyRates(syms[s], tf, 0, chShift + 1, rt) <= 0) return 0;
+   ArraySetAsSeries(rt, true);
+   if(ArraySize(rt) <= chShift) return 0;
+
+   double tenkan[1], kijun[1], senA[1], senB[1];
+   if(CopyBuffer(ich[s][tfIdx], 0, sh, 1, tenkan) <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, sh, 1, kijun)  <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, sh, 1, senA)   <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, sh, 1, senB)   <= 0) return 0;
+
+   double closeP = rt[sh].close;
+   double cHi    = MathMax(senA[0], senB[0]);
+   double cLo    = MathMin(senA[0], senB[0]);
+
+   bool above = closeP > tenkan[0] && closeP > kijun[0] && closeP > cHi;
+   bool below = closeP < tenkan[0] && closeP < kijun[0] && closeP < cLo;
+   if(!above && !below) return 0;
+
+   double tenkan_ch[1], kijun_ch[1], senA_ch[1], senB_ch[1];
+   if(CopyBuffer(ich[s][tfIdx], 0, chShift, 1, tenkan_ch) <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 1, chShift, 1, kijun_ch)  <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 2, chShift, 1, senA_ch)   <= 0) return 0;
+   if(CopyBuffer(ich[s][tfIdx], 3, chShift, 1, senB_ch)   <= 0) return 0;
+
+   double chik = closeP;
+   double cHiC = MathMax(senA_ch[0], senB_ch[0]);
+   double cLoC = MathMin(senA_ch[0], senB_ch[0]);
+
+   if(above && chik > rt[chShift].high &&
+      chik > tenkan_ch[0] && chik > kijun_ch[0] && chik > cHiC) return  1;
+
+   if(below && chik < rt[chShift].low &&
+      chik < tenkan_ch[0] && chik < kijun_ch[0] && chik < cLoC) return -1;
+
+   return 0;
+}
+
+//--- Gate 2. Walk the chain from M1 up to InpAlignTop and report how far it
+//--- holds: 'top' is the highest timeframe index aligned the same way as M1
+//--- with every timeframe below it aligned too. M1 first (the cheapest to
+//--- fail). Returns the direction, or 0 when M1 and M2 do not both agree.
+int ChainWalk(const int s, int &top)
+{
+   top = -1;
+   int dir = CheckAlign(s, 0);
+   if(dir == 0) return 0;
+   top = 0;
+   for(int t = 1; t <= alignTopIdx; t++)
+   {
+      if(CheckAlign(s, t) != dir) break;
+      top = t;
+   }
+   return (top >= 1) ? dir : 0;
+}
+
+//==============================================================
+// Ichimoku structure target (gate 2b)
+//
+// A partial breakout: M1 up to some timeframe is aligned, and the
+// next timeframe up is not. Its nearest line ahead of price — tenkan,
+// kijun, SSA or SSB — is where price is heading and where it is
+// expected to bounce, so it becomes the target. The trade is only
+// taken when the road to it is clear: no tenkan, kijun or cloud edge
+// of any timeframe above it lies between entry and that line, and
+// (InpStructChikou) each of those timeframes' chikou can travel the
+// same distance without meeting a past candle or line.
+//==============================================================
+
+//--- True when 'lvl' lies strictly between entry and the target, on the
+//--- trade's side — an obstacle on the road.
+bool OnRoad(const double lvl, const int dir, const double from, const double to)
+{
+   return (dir * (lvl - from) > 0 && dir * (lvl - to) < 0);
+}
+
+//--- Price side: this timeframe's current tenkan, kijun, Span A and Span B.
+bool PriceFree(const int s, const int t, const int dir, const double from, const double to, string &why)
+{
+   double v[1];
+   string nm[4] = { "tenkan", "kijun", "SSA", "SSB" };
+   for(int b = 0; b < 4; b++)
+   {
+      if(CopyBuffer(ich[s][t], b, 1, 1, v) <= 0) { why = tfName[t] + " unreadable"; return(false); }
+      if(OnRoad(v[0], dir, from, to)) { why = tfName[t] + " " + nm[b] + " in the way"; return(false); }
+   }
+   return(true);
+}
+
+//--- Chikou side: the last closed close, plotted Kijun bars back, must be
+//--- able to move 'dist' in the trade's direction. Its path is the columns
+//--- from its own position toward now (InpChikouPathBars of them): the
+//--- candle extreme it would run into and the four lines as they stood.
+bool ChikouFree(const int s, const int t, const int dir, const double dist, string &why)
+{
+   int n       = (int)MathMax(1, MathMin(Kijun - 1, InpChikouPathBars));
+   int chShift = 1 + Kijun;
+
+   MqlRates rt[];
+   if(CopyRates(syms[s], tfs[t], 0, chShift + 1, rt) <= chShift) { why = tfName[t] + " chikou unreadable"; return(false); }
+   ArraySetAsSeries(rt, true);
+
+   double from = rt[1].close;
+   double to   = from + dir * dist;
+   for(int k = 0; k < n; k++)
+   {
+      int sh = chShift - k;
+      double ext = (dir == 1) ? rt[sh].high : rt[sh].low;
+      if(OnRoad(ext, dir, from, to)) { why = tfName[t] + " chikou blocked by price"; return(false); }
+
+      double v[1];
+      for(int b = 0; b < 4; b++)
+      {
+         if(CopyBuffer(ich[s][t], b, sh, 1, v) <= 0) { why = tfName[t] + " chikou unreadable"; return(false); }
+         if(OnRoad(v[0], dir, from, to)) { why = tfName[t] + " chikou blocked by a line"; return(false); }
+      }
+   }
+   return(true);
+}
+
+//+------------------------------------------------------------------+
+//| Gate 2b. 'tt' is the first timeframe above the aligned chain.    |
+//| Its nearest line ahead is the target, and the road to it must be |
+//| free on tt and every timeframe above it up to InpAlignTop.       |
+//+------------------------------------------------------------------+
+bool PlanStructure(const int s, const int dir, const int tt, const double entry, RangePlan &p)
+{
+   p.target = 0; p.behind = 0; p.tgtPow = 0; p.tgtName = ""; p.tp = 0; p.sl = 0; p.rr = 0; p.why = "";
+
+   //--- The target is the NEAREST of tt's four lines ahead of entry —
+   //--- tenkan, kijun, SSA or SSB, whichever price reaches first.
+   string nm[4] = { "tenkan", "kijun", "SSA", "SSB" };
+   double line  = 0.0;
+   int    which = -1;
+   for(int b = 0; b < 4; b++)
+   {
+      double v[1];
+      if(CopyBuffer(ich[s][tt], b, 1, 1, v) <= 0) { p.why = tfName[tt] + " unreadable"; return(false); }
+      if(dir * (v[0] - entry) <= 0) continue;                  // behind price
+      if(which < 0 || dir * (v[0] - line) < 0) { line = v[0]; which = b; }
+   }
+   if(which < 0) { p.why = tfName[tt] + " has no line ahead"; return(false); }
+
+   int d = (int)SymbolInfoInteger(syms[s], SYMBOL_DIGITS);
+   p.target  = line;
+   p.tgtName = tfName[tt] + " " + nm[which] + " " + DoubleToString(line, d);
+
+   //--- A line that coincides with a PO3 number is the higher-probability
+   //--- target, and the PO3 number is what the trade aims at. The nearest
+   //--- multiple of the range step counts when it is within the tolerance
+   //--- and still ahead of entry.
+   long   step = PO3Step(InpPO3Power);
+   long   raw  = (long)MathRound(line * InpPO3Scale / (double)step) * step;
+   double lvl  = (double)raw / InpPO3Scale;
+   bool   onPO3 = (raw > 0 && MathAbs(lvl - line) <= InpStructPO3TolPips * PipPrice(s) &&
+                   dir * (lvl - entry) > 0);
+   if(!onPO3 && InpStructNeedPO3) { p.why = p.tgtName + " not on a PO3 number"; return(false); }
+
+   //--- The road is checked to whichever of the line and the PO3 number comes
+   //--- first: a PO3 number just past the line must not count the line itself
+   //--- as an obstacle, and one just short of it is where the trade ends.
+   double roadTo = line;
+   if(onPO3 && dir * (lvl - line) < 0) roadTo = lvl;
+
+   double dist = dir * (roadTo - entry);
+   for(int t = tt; t <= alignTopIdx; t++)
+   {
+      if(!PriceFree(s, t, dir, entry, roadTo, p.why)) return(false);
+      if(InpStructChikou && !ChikouFree(s, t, dir, dist, p.why)) return(false);
+   }
+
+   double ahead;
+   int    pw;
+   if(!PO3Levels(dir, entry, ahead, p.behind, pw)) { p.why = "no PO3 level behind"; return(false); }
+
+   if(onPO3)
+   {
+      p.target  = lvl;
+      p.tgtPow  = PO3Power(raw);
+      p.tgtName += " = PO3 " + PO3Tag(s, lvl, p.tgtPow);
+   }
+   return(FinishPlan(s, dir, entry, p));
+}
+
+//==============================================================
+// Utility Functions
+//==============================================================
+
+string PCTime()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeLocal(), dt);
+   int h = dt.hour;
+   string ampm = (h >= 12) ? "PM" : "AM";
+   if(h == 0) h = 12;
+   else if(h > 12) h -= 12;
+   return IntegerToString(h) + ":" + StringFormat("%02d", dt.min) + " " + ampm;
+}
+
+bool SpreadOK(const string sym)
+{
+   if(InpMaxSpreadPoints <= 0) return true;
+   return SymbolInfoInteger(sym, SYMBOL_SPREAD) <= InpMaxSpreadPoints;
+}
+
+//--- Lots such that a stop-out at this trade's own stop loses InpRiskPct.
+double RiskLots(const int s, const double stopDist)
+{
+   if(InpRiskPct <= 0 || stopDist <= 0) return InpFixedLots;
+
+   double tickValue = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(syms[s], SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0 || tickSize <= 0) return InpFixedLots;
+
+   double moneyPerLot = (stopDist / tickSize) * tickValue;
+   if(moneyPerLot <= 0) return InpFixedLots;
+
+   double lots = AccountInfoDouble(ACCOUNT_EQUITY) * (InpRiskPct / 100.0) / moneyPerLot;
+
+   double lotStep = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_STEP);
+   double lotMin  = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MIN);
+   double lotMax  = SymbolInfoDouble(syms[s], SYMBOL_VOLUME_MAX);
+   if(lotStep > 0) lots = MathFloor(lots / lotStep) * lotStep;
+   lots = MathMax(lotMin, MathMin(lotMax, lots));
+
+   return (lots > 0) ? lots : InpFixedLots;
+}
+
+//==============================================================
+// VPS exits — ported from ichimoku-h4-m1-vps-ea.mq5 (InCloudTouch
+// and ManageLevelProtection), with the exit timeframe standing in
+// for the VPS build's tier:
+//   * the MAIN EXIT is a touch of the exit TF's cloud — a long
+//     closes when the bid touches the cloud's upper edge, a short
+//     when the ask touches the lower edge. That is the trade's stop.
+//   * there is NO take profit. Profit is protected by the VPS
+//     layers: break-even (entry + 15 points) once profit reaches
+//     1 x ATR (0.5 on an H1/H4 exit TF), then a chandelier 1 x ATR
+//     behind the peak once profit reaches 2 x ATR (0.5 on H1/H4).
+//   * a wide disaster stop (8 x ATR) rides on the order for gaps
+//     and disconnects, re-attached if it goes missing.
+// The exit TF is the highest timeframe aligned at entry (the VPS
+// rule: a tier exits on its own cloud) unless InpExitCloudTF fixes
+// it. It is written into the position comment so a restart finds it.
+//==============================================================
+
+//--- The exit cloud's near edge for a trade in direction dir.
+bool ExitCloudEdge(const int s, const int t, const int dir, double &edge)
+{
+   double a[1], b[1];
+   if(CopyBuffer(ich[s][t], 2, 1, 1, a) <= 0 || CopyBuffer(ich[s][t], 3, 1, 1, b) <= 0) return(false);
+   edge = (dir == 1) ? MathMax(a[0], b[0]) : MathMin(a[0], b[0]);
+   return(true);
+}
+
+bool InCloudTouch(const int s, const int t, const int dir)
+{
+   double edge;
+   if(!ExitCloudEdge(s, t, dir, edge)) return(false);
+   if(dir == 1) return SymbolInfoDouble(syms[s], SYMBOL_BID) <= edge;
+   return SymbolInfoDouble(syms[s], SYMBOL_ASK) >= edge;
+}
+
+//--- After a restart: the exit TF from the comment's last word, the entry
+//--- from the fill, the chandelier peak rebuilt from the M1 bars since the
+//--- open, and BE read off a stop already on the profit side of entry.
+void RebuildVpsState(const int s, const int dir)
+{
+   string comm = PositionGetString(POSITION_COMMENT);
+   int    idx  = -1;
+   for(int t = 0; t < TFS; t++)
+   {
+      int at = StringLen(comm) - StringLen(tfName[t]);
+      if(at > 0 && StringSubstr(comm, at) == tfName[t] && StringSubstr(comm, at - 1, 1) == " ") idx = t;
+   }
+   if(idx < 0)
+   {
+      idx = (exitFixedIdx >= 0) ? exitFixedIdx : 2;
+      Print(PCTime() + " | " + syms[s] + " position comment \"" + comm + "\" names no exit TF — using " + tfName[idx] + ".");
+   }
+   exitIdx[s] = idx;
+   entryPx[s] = PositionGetDouble(POSITION_PRICE_OPEN);
+   peakHi[s]  = entryPx[s];
+   peakLo[s]  = entryPx[s];
+
+   datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
+   double hi[], lo[];
+   if(CopyHigh(syms[s], PERIOD_M1, opened, TimeCurrent(), hi) > 0) peakHi[s] = MathMax(peakHi[s], hi[ArrayMaximum(hi)]);
+   if(CopyLow (syms[s], PERIOD_M1, opened, TimeCurrent(), lo) > 0) peakLo[s] = MathMin(peakLo[s], lo[ArrayMinimum(lo)]);
+
+   double sl = PositionGetDouble(POSITION_SL);
+   beDone[s] = (sl > 0.0 && dir * (sl - entryPx[s]) > 0);
+}
+
+//--- Break-even, chandelier trail and the disaster-stop heal, as in the
+//--- VPS build's ManageLevelProtection, on the exit TF's ATR and bar.
+void ManageVpsProtection(const int s, const ulong ticket)
+{
+   int dir = state[s];
+   int t   = exitIdx[s];
+
+   double a[1];
+   if(CopyBuffer(atrH[s][t], 0, 1, 1, a) <= 0 || a[0] <= 0) return;
+   double atrVal = a[0];
+
+   MqlRates tfx[];
+   if(CopyRates(syms[s], tfs[t], 0, 1, tfx) <= 0) return;
+   ArraySetAsSeries(tfx, true);
+
+   bool isLong = (dir == 1);
+   if(isLong) { if(tfx[0].high > peakHi[s]) peakHi[s] = tfx[0].high; }
+   else       { if(tfx[0].low  < peakLo[s]) peakLo[s] = tfx[0].low;  }
+
+   string sym     = syms[s];
+   double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
+   double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   int    digits  = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double bid     = SymbolInfoDouble(sym, SYMBOL_BID);
+   double ask     = SymbolInfoDouble(sym, SYMBOL_ASK);
+   bool   upper   = (t >= 5);                 // H1 or H4 exit TF — the VPS's tighter settings
+
+   if(!PositionSelectByTicket(ticket)) return;
+   double slCur = PositionGetDouble(POSITION_SL);
+
+   //--- Disaster stop heal, anchored at entry, only while no stop exists.
+   if(InpDisasterATRMult > 0 && slCur == 0.0)
+   {
+      double dSl = NormalizeDouble(isLong ? entryPx[s] - InpDisasterATRMult * atrVal
+                                          : entryPx[s] + InpDisasterATRMult * atrVal, digits);
+      bool okD = isLong ? (dSl > 0 && dSl < bid - minDist) : (dSl > ask + minDist);
+      if(okD && trade.PositionModify(ticket, dSl, 0)) slCur = dSl;
+   }
+
+   //--- Break-even, one-shot.
+   double beATR = upper ? InpBEProfitH1H4 : InpBEProfitATR;
+   if(!beDone[s])
+   {
+      bool armed = isLong ? (bid >= entryPx[s] + beATR * atrVal) : (ask <= entryPx[s] - beATR * atrVal);
+      if(armed)
+      {
+         double slNew = NormalizeDouble(isLong ? entryPx[s] + InpBECoverPoints * point
+                                               : entryPx[s] - InpBECoverPoints * point, digits);
+         bool ok = isLong ? ((slCur == 0.0 || slNew > slCur + point) && slNew < bid - minDist)
+                          : ((slCur == 0.0 || slNew < slCur - point) && slNew > ask + minDist);
+         if(ok)
+         {
+            if(trade.PositionModify(ticket, slNew, 0)) { beDone[s] = true; slCur = slNew; }
+            else Print(PCTime() + " | " + sym + " BE modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+         }
+      }
+   }
+
+   //--- Chandelier behind the peak. Only tightens, clears the broker
+   //--- distance, and skips improvements under 0.3 x ATR.
+   double armATR = upper ? InpTrailActivateATR : InpSpikeLockATR;
+   bool armed = isLong ? (bid >= entryPx[s] + armATR * atrVal) : (ask <= entryPx[s] - armATR * atrVal);
+   if(armed)
+   {
+      double slNew = NormalizeDouble(isLong ? peakHi[s] - InpTrailATR * atrVal
+                                            : peakLo[s] + InpTrailATR * atrVal, digits);
+      bool ok = isLong ? (slNew > slCur + point && slNew < bid - minDist &&
+                          (slCur == 0.0 || slNew - slCur >= 0.3 * atrVal))
+                       : ((slCur == 0.0 || slNew < slCur - point) && slNew > ask + minDist &&
+                          (slCur == 0.0 || slCur - slNew >= 0.3 * atrVal));
+      if(ok && !trade.PositionModify(ticket, slNew, 0))
+         Print(PCTime() + " | " + sym + " trail modify failed, retcode " + IntegerToString(trade.ResultRetcode()));
+   }
+}
+
+//==============================================================
+// Pullback entry — trade the lower timeframes WITH the higher one.
+//
+// H4 (and, with InpPBNeedH1, H1) aligned sets the trend. Within the
+// last InpPBLookbackMins minutes M1+M2 must have been aligned
+// AGAINST it — a real counter move, not just a pause — and the
+// extreme of that move must have come within InpPBLevelTolPips of a
+// level: a PO3 number, or a tenkan, kijun, SSA or SSB of M5, M15,
+// M30 or H1. The trigger is M1+M2 turning back WITH the trend inside
+// a kihon window (the same breakout tracking the breakout entry
+// uses). The stop sits InpSLBufferPips beyond the pullback extreme.
+// There is no take profit and no cloud exit — the dip usually sits
+// in a lower cloud — so the VPS build's BE and chandelier, on the
+// InpPBManageTF ATR, take the trade out.
+//==============================================================
+
+struct PBPlan
+{
+   double sl;
+   double tp;       // swing target less InpTPBufferPips (0 = trail exit)
+   double swing;    // the swing extreme the dip came from
+   double extreme;
+   string level;
+   string why;
+};
+
+bool PlanPullback(const int s, const int dir, const double entry, PBPlan &p)
+{
+   p.sl = 0; p.tp = 0; p.swing = 0; p.extreme = 0; p.level = ""; p.why = "";
+   string sym = syms[s];
+   int    d   = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double pip = PipPrice(s);
+
+   if(CheckAlign(s, 6) != dir)                    { p.why = "H4 not aligned"; return(false); }
+   if(InpPBNeedH1 && CheckAlign(s, 5) != dir)     { p.why = "H1 not aligned"; return(false); }
+
+   datetime counter = pairSeen[s][dir == 1 ? 1 : 0];
+   if(counter <= 0 || counter < TimeCurrent() - InpPBLookbackMins * 60)
+   { p.why = "no counter move in the lookback"; return(false); }
+
+   //--- The pullback extreme: the low (long) / high (short) of the M1 bars
+   //--- since the counter move began, bounded by the lookback.
+   MqlRates r[];
+   int n = CopyRates(sym, PERIOD_M1, 1, InpPBLookbackMins, r);
+   if(n <= 0) { p.why = "no M1 bars"; return(false); }
+   double ext = (dir == 1) ? r[0].low : r[0].high;
+   for(int i = 1; i < n; i++)
+      ext = (dir == 1) ? MathMin(ext, r[i].low) : MathMax(ext, r[i].high);
+   p.extreme = ext;
+
+   //--- Did the dip reach a level? A PO3 number first, then the lines.
+   double tol  = InpPBLevelTolPips * pip;
+   long   step = PO3Step(InpPO3Power);
+   long   raw  = (long)MathRound(ext * InpPO3Scale / (double)step) * step;
+   double lvl  = (double)raw / InpPO3Scale;
+   if(raw > 0 && MathAbs(lvl - ext) <= tol)
+      p.level = "PO3 " + PO3Tag(s, lvl, PO3Power(raw));
+   else
+   {
+      string nm[4] = { "tenkan", "kijun", "SSA", "SSB" };
+      for(int t = 2; t <= 5 && p.level == ""; t++)
+         for(int b = 0; b < 4; b++)
+         {
+            double v[1];
+            if(CopyBuffer(ich[s][t], b, 1, 1, v) <= 0) continue;
+            if(MathAbs(v[0] - ext) <= tol)
+            {
+               p.level = tfName[t] + " " + nm[b] + " " + DoubleToString(v[0], d);
+               break;
+            }
+         }
+   }
+   if(p.level == "") { p.why = "the dip reached no level"; return(false); }
+
+   p.sl = ext - dir * InpSLBufferPips * pip;
+   if(dir * (entry - p.sl) < InpMinSLPips * pip) p.sl = entry - dir * InpMinSLPips * pip;
+   p.sl = NormalizeDouble(p.sl, d);
+   double dist = dir * (entry - p.sl);
+   if(dist > InpPBMaxSLPips * pip)
+   { p.why = StringFormat("swing stop %.0f pips > %.0f", dist / pip, InpPBMaxSLPips); return(false); }
+
+   double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(sym, SYMBOL_POINT);
+   bool okSL = (dir == 1) ? (p.sl < SymbolInfoDouble(sym, SYMBOL_BID) - minDist)
+                          : (p.sl > SymbolInfoDouble(sym, SYMBOL_ASK) + minDist);
+   if(!okSL) { p.why = "inside the broker's minimum stop distance"; return(false); }
+
+   //--- Swing target: the extreme the dip came FROM — the high (long) / low
+   //--- (short) of the last InpPBSwingBars M1 bars. The TP sits
+   //--- InpTPBufferPips in front of it and must clear InpMinTPPips.
+   if(InpPBExit == PB_EXIT_SWING)
+   {
+      MqlRates w[];
+      int m = CopyRates(sym, PERIOD_M1, 1, InpPBSwingBars, w);
+      if(m <= 0) { p.why = "no M1 bars for the swing"; return(false); }
+      double sw = (dir == 1) ? w[0].high : w[0].low;
+      for(int i = 1; i < m; i++)
+         sw = (dir == 1) ? MathMax(sw, w[i].high) : MathMin(sw, w[i].low);
+      p.swing = sw;
+      p.tp    = NormalizeDouble(sw - dir * InpTPBufferPips * pip, d);
+      double reward = dir * (p.tp - entry);
+      if(reward < InpMinTPPips * pip)
+      { p.why = StringFormat("swing target %.0f pips < %.0f", reward / pip, InpMinTPPips); return(false); }
+      if(InpPBMinRR > 0 && reward / dist < InpPBMinRR)
+      { p.why = StringFormat("swing rr %.2f < %.2f", reward / dist, InpPBMinRR); return(false); }
+      bool okTP = (dir == 1) ? (p.tp > SymbolInfoDouble(sym, SYMBOL_ASK) + minDist)
+                             : (p.tp < SymbolInfoDouble(sym, SYMBOL_BID) - minDist);
+      if(!okTP) { p.why = "swing TP inside the broker's minimum stop distance"; return(false); }
+   }
+   return(true);
+}
+
+bool OpenPullback(const int s, const int dir, const PBPlan &p, const double entry, const string kihonInfo)
+{
+   string sym = syms[s];
+   int    d   = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double pip = PipPrice(s);
+   double lots = RiskLots(s, dir * (entry - p.sl));
+
+   trade.SetTypeFillingBySymbol(sym);
+   string comment = ((dir == 1) ? "PO3 Scalp Buy PB " : "PO3 Scalp Sell PB ") + tfName[pbManageIdx];
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, entry, p.sl, p.tp, comment)
+                        : trade.Sell(lots, sym, entry, p.sl, p.tp, comment);
+   if(ok)
+   {
+      state[s]   = dir;
+      pbTrade[s] = true;
+      slPrice[s] = p.sl;
+      tpPrice[s] = p.tp;
+      exitIdx[s] = pbManageIdx;
+      entryPx[s] = entry;
+      peakHi[s]  = entry;
+      peakLo[s]  = entry;
+      beDone[s]  = false;
+      string msg = PCTime() + " | " + ((dir == 1) ? "Buy " : "Sell ") + sym + " PULLBACK @ " +
+                   DoubleToString(lots, 2) + " | dip to " + DoubleToString(p.extreme, d) + " at " + p.level +
+                   ", SL " + DoubleToString(p.sl, d) + StringFormat(" (%.0f pips)", dir * (entry - p.sl) / pip) +
+                   (p.tp > 0 ? ", TP " + DoubleToString(p.tp, d) + StringFormat(" (%.0f pips) at swing ", dir * (p.tp - entry) / pip) +
+                               DoubleToString(p.swing, d)
+                             : ", no TP") +
+                   " [" + kihonInfo + "]";
+      Print(msg); SendNotification(msg);
+   }
+   return ok;
+}
+
+//==============================================================
+// Trading
+//==============================================================
+
+bool OpenScalp(const int s, const int dir, const int top, const RangePlan &p, const double entry, const string kihonInfo)
+{
+   string sym = syms[s];
+   int    d   = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double pip = PipPrice(s);
+   trade.SetTypeFillingBySymbol(sym);
+
+   if(InpExitMode == EXIT_VPS)
+   {
+      //--- The exit cloud is the stop: price the risk on the distance to its
+      //--- near edge now (floored at InpMinSLPips), and refuse an entry that
+      //--- is already touching it.
+      int    t = (exitFixedIdx >= 0) ? exitFixedIdx : top;
+      double edge;
+      if(!ExitCloudEdge(s, t, dir, edge)) return(false);
+      double cloudDist = dir * (entry - edge);
+      if(cloudDist <= 0)
+      {
+         Print(PCTime() + " | " + sym + " entry skipped — already at the " + tfName[t] + " exit cloud.");
+         return(true);                        // not an order failure
+      }
+      double lots = RiskLots(s, MathMax(cloudDist, InpMinSLPips * pip));
+
+      double sl = 0.0, a[1];
+      if(InpDisasterATRMult > 0 && CopyBuffer(atrH[s][t], 0, 1, 1, a) > 0 && a[0] > 0)
+      {
+         double point   = SymbolInfoDouble(sym, SYMBOL_POINT);
+         double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * point;
+         double dist    = MathMax(a[0] * InpDisasterATRMult, minDist + point);
+         sl = NormalizeDouble(entry - dir * dist, d);
+         bool slValid = (dir == 1) ? (sl > 0 && sl < SymbolInfoDouble(sym, SYMBOL_BID) - minDist)
+                                   : (sl > SymbolInfoDouble(sym, SYMBOL_ASK) + minDist);
+         if(!slValid) sl = 0.0;                // healed next minute
+      }
+
+      string comment = ((dir == 1) ? "PO3 Scalp Buy " : "PO3 Scalp Sell ") + tfName[t];
+      bool ok = (dir == 1) ? trade.Buy(lots, sym, entry, sl, 0, comment)
+                           : trade.Sell(lots, sym, entry, sl, 0, comment);
+      if(ok)
+      {
+         state[s]   = dir;
+         exitIdx[s] = t;
+         entryPx[s] = entry;
+         peakHi[s]  = entry;
+         peakLo[s]  = entry;
+         beDone[s]  = false;
+         string msg = PCTime() + " | " + ((dir == 1) ? "Buy " : "Sell ") + sym + " @ " +
+                      DoubleToString(lots, 2) + " | exit on the " + tfName[t] + " cloud " +
+                      DoubleToString(edge, d) + StringFormat(" (%.0f pips)", cloudDist / pip) +
+                      ", no TP | target " + p.tgtName + " [" + kihonInfo + "]";
+         Print(msg); SendNotification(msg);
+      }
+      return ok;
+   }
+
+   double lots = RiskLots(s, dir * (entry - p.sl));
+   string comment = (dir == 1) ? "PO3 Scalp Buy" : "PO3 Scalp Sell";
+   bool ok = (dir == 1) ? trade.Buy(lots, sym, entry, p.sl, p.tp, comment)
+                        : trade.Sell(lots, sym, entry, p.sl, p.tp, comment);
+   if(ok)
+   {
+      state[s]   = dir;
+      slPrice[s] = p.sl;
+      tpPrice[s] = p.tp;
+
+      string msg = PCTime() + " | " + ((dir == 1) ? "Buy " : "Sell ") + sym + " @ " +
+                   DoubleToString(lots, 2) + " | TP " + DoubleToString(p.tp, d) + " -> " +
+                   p.tgtName + ", SL " + DoubleToString(p.sl, d) +
+                   " behind " + DoubleToString(p.behind, d) +
+                   StringFormat(" | %.0f/%.0f pips, rr %.2f", dir * (p.tp - entry) / pip,
+                                dir * (entry - p.sl) / pip, p.rr) +
+                   " [" + kihonInfo + "]";
+      Print(msg); SendNotification(msg);
+   }
+   return ok;
+}
+
+//--- Free the slot when the broker has closed the trade, and re-attach a
+//--- stop that has gone missing. Nothing else moves.
+void ManagePosition(const int s)
+{
+   ulong ticket;
+   if(!SymbolTicket(s, ticket))
+   {
+      Print(PCTime() + " | " + syms[s] + " scalp closed at the broker (" +
+            (InpExitMode == EXIT_VPS ? "BE, trail or disaster stop" : "SL or TP") + ").");
+      state[s] = 0; slPrice[s] = 0.0; tpPrice[s] = 0.0; exitIdx[s] = -1; pbTrade[s] = false;
+      return;
+   }
+
+   //--- A pullback trade with a swing TP is fully defined on the order:
+   //--- only a missing stop is put back (from entry state, or the rebuild).
+   if(pbTrade[s] && PositionGetDouble(POSITION_TP) > 0.0)
+   {
+      if(slPrice[s] <= 0.0) slPrice[s] = PositionGetDouble(POSITION_SL);
+      if(PositionGetDouble(POSITION_SL) == 0.0 && slPrice[s] > 0.0)
+         trade.PositionModify(ticket, slPrice[s], PositionGetDouble(POSITION_TP));
+      return;
+   }
+
+   if(InpExitMode == EXIT_VPS || pbTrade[s])
+   {
+      if(exitIdx[s] < 0) RebuildVpsState(s, state[s]);
+      if(!pbTrade[s] && InCloudTouch(s, exitIdx[s], state[s]))
+      {
+         if(trade.PositionClose(ticket))
+         {
+            Print(PCTime() + " | Close " + syms[s] + " (" + tfName[exitIdx[s]] + " kumo touch)");
+            state[s] = 0; exitIdx[s] = -1;
+         }
+         else
+            Print(PCTime() + " | " + syms[s] + " kumo touch but close failed, retcode " +
+                  IntegerToString(trade.ResultRetcode()) + " — will retry");
+         return;
+      }
+      ManageVpsProtection(s, ticket);
+      return;
+   }
+
+   if(PositionGetDouble(POSITION_SL) != 0.0 || slPrice[s] <= 0.0) return;
+
+   string sym     = syms[s];
+   double minDist = SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL) * SymbolInfoDouble(sym, SYMBOL_POINT);
+   bool   okHeal  = (state[s] == 1) ? (slPrice[s] < SymbolInfoDouble(sym, SYMBOL_BID) - minDist)
+                                    : (slPrice[s] > SymbolInfoDouble(sym, SYMBOL_ASK) + minDist);
+   if(okHeal && trade.PositionModify(ticket, slPrice[s], PositionGetDouble(POSITION_TP)))
+      Print(PCTime() + " | " + sym + " stop was missing — re-attached at " +
+            DoubleToString(slPrice[s], (int)SymbolInfoInteger(sym, SYMBOL_DIGITS)));
+   else if(okHeal)
+      Print(PCTime() + " | " + sym + " stop is missing and could not be re-attached, retcode " +
+            IntegerToString(trade.ResultRetcode()));
+}
+
+//==============================================================
+// Main Loop — runs once per closed M1 bar.
+//==============================================================
+
+void OnTick()
+{
+   int nowKey = (int)(TimeCurrent() / 60);
+   if(nowKey == lastMinuteKey) return;
+   lastMinuteKey = nowKey;
+
+   bool synced = false;
+   for(int s = 0; s < symsCount; s++)
+   {
+      MqlRates m1[];
+      if(CopyRates(syms[s], PERIOD_M1, 0, 2, m1) < 2) continue;
+      ArraySetAsSeries(m1, true);
+      if(m1[1].time == lastM1bar[s]) continue;
+      lastM1bar[s] = m1[1].time;
+
+      if(!synced) { SyncStateFromPositions(); synced = true; }
+
+      TrackBreakout(s, m1[1].time);
+
+      if(state[s] != 0) { ManagePosition(s); continue; }
+
+      // Gate 1 — time: enough day/week clocks on a kihon number, anywhere
+      // inside the candle. Market-wide and the cheapest, so it goes first.
+      string   kInfo;
+      datetime winStart;
+      if(KihonConfluence(s, kInfo, winStart) < InpKihonMinTFs) continue;
+      if(!SpreadOK(syms[s])) continue;
+
+      // Pullback entry: needs the same fresh M1+M2 turn inside the window,
+      // in the H4 trend's direction.
+      if(InpEntryMode != ENTRY_BREAKOUT && !brkUsed[s] && brkTime[s] >= winStart)
+      {
+         int    pdir   = brkDir[s];
+         double pEntry = (pdir == 1) ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
+                                     : SymbolInfoDouble(syms[s], SYMBOL_BID);
+         PBPlan pb;
+         if(PlanPullback(s, pdir, pEntry, pb))
+         {
+            if(OpenPullback(s, pdir, pb, pEntry, kInfo + " | turn " + TimeToString(brkTime[s], TIME_MINUTES)))
+               brkUsed[s] = true;
+            else
+               Print(PCTime() + " | " + syms[s] + " pullback signal but order failed, retcode " +
+                     IntegerToString(trade.ResultRetcode()));
+            continue;
+         }
+      }
+      if(InpEntryMode == ENTRY_PULLBACK) continue;
+
+      // The breakout must have happened inside this window and not been traded.
+      if(InpBreakoutOnly && (brkUsed[s] || brkTime[s] < winStart)) continue;
+
+      // Gate 2 — structure. Fully aligned to InpAlignTop: PO3 target.
+      // Aligned only part of the way: the next TF's nearest line (or the PO3 number on it), if the road is free.
+      int top;
+      int dir = ChainWalk(s, top);
+      if(dir == 0) continue;
+      if(InpBreakoutOnly && dir != brkDir[s]) continue;
+
+      bool full = (top >= alignTopIdx);
+      if(!full && !(InpStructTarget && top >= structMinIdx)) continue;
+
+      // Gate 3 — the target and the room to it.
+      double entry = (dir == 1) ? SymbolInfoDouble(syms[s], SYMBOL_ASK)
+                                : SymbolInfoDouble(syms[s], SYMBOL_BID);
+      RangePlan p;
+      bool planned = full ? PlanRange(s, dir, entry, p) : PlanStructure(s, dir, top + 1, entry, p);
+      if(!planned)
+      {
+         // Structure vetoes are routine (most partial chains have no clear
+         // road), so only a chain that reached a target is worth a line.
+         if(full || StringFind(p.why, "rr ") == 0 || StringFind(p.why, "no room") == 0)
+            Print(PCTime() + " | " + syms[s] + ((dir == 1) ? " long" : " short") +
+                  " aligned to " + tfName[top] + " at kihon time [" + kInfo + "] but skipped — " + p.why);
+         continue;
+      }
+
+      if(InpBreakoutOnly)
+         kInfo += " | breakout " + TimeToString(brkTime[s], TIME_MINUTES);
+      if(OpenScalp(s, dir, top, p, entry, kInfo))
+         brkUsed[s] = true;
+      else
+         Print(PCTime() + " | " + syms[s] + " entry signal but order failed, retcode " +
+               IntegerToString(trade.ResultRetcode()));
+   }
+}
+//Fear God and Live

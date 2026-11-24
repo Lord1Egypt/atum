@@ -1,0 +1,5 @@
+//@version=6
+indicator("Broken on purpose", overlay = true)
+
+ma = sma(close, 14)
+plot(ma, "MA", color = color.new(color.blue, 0))

@@ -1,0 +1,49 @@
+// Pine Script pivot high and low support and resistance
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/pivot-support-resistance
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Pivot support and resistance", overlay = true, max_lines_count = 100)
+
+leftBars  = input.int(10, "Left bars", minval = 1)
+rightBars = input.int(5, "Right bars", minval = 1)
+maxLevels = input.int(6, "Unbroken levels to keep per side", minval = 1, maxval = 25)
+
+ph = ta.pivothigh(high, leftBars, rightBars)
+pl = ta.pivotlow(low, leftBars, rightBars)
+
+// Unbroken levels, oldest first
+var array<line> resLines = array.new<line>()
+var array<line> supLines = array.new<line>()
+
+// A new pivot: a line from the pivot bar, extended to the right
+if not na(ph)
+    resLines.push(line.new(bar_index - rightBars, ph, bar_index, ph, color = color.red, width = 2, extend = extend.right))
+    if resLines.size() > maxLevels
+        resLines.shift().delete()
+if not na(pl)
+    supLines.push(line.new(bar_index - rightBars, pl, bar_index, pl, color = color.teal, width = 2, extend = extend.right))
+    if supLines.size() > maxLevels
+        supLines.shift().delete()
+
+// A level is broken when a bar closes beyond it: end the line there and stop tracking it.
+// The loops go backwards so removing an element doesn't skip the next one.
+if resLines.size() > 0
+    for i = resLines.size() - 1 to 0
+        line l = resLines.get(i)
+        if close > l.get_y1()
+            l.set_extend(extend.none)
+            l.set_x2(bar_index)
+            l.set_style(line.style_dotted)
+            resLines.remove(i)
+if supLines.size() > 0
+    for i = supLines.size() - 1 to 0
+        line l = supLines.get(i)
+        if close < l.get_y1()
+            l.set_extend(extend.none)
+            l.set_x2(bar_index)
+            l.set_style(line.style_dotted)
+            supLines.remove(i)
+
+plotshape(not na(ph), "Pivot high", shape.triangledown, location.abovebar, color.red, offset = -rightBars, size = size.tiny)
+plotshape(not na(pl), "Pivot low", shape.triangleup, location.belowbar, color.teal, offset = -rightBars, size = size.tiny)

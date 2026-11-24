@@ -1,0 +1,39 @@
+//@version=6
+indicator("Current Session Only", overlay=true)
+
+// === INPUTS ===
+tz = input.string("America/Los_Angeles", "Timezone")
+visibleSession = input.session("0630-1315", "Visible Session")
+hideOpacity = input.int(100, "Hidden Candle Transparency", minval=0, maxval=100)
+
+// === SESSION ANCHOR BASED ON LATEST BAR ===
+anchorTime = last_bar_time
+
+anchorYear  = year(anchorTime, tz)
+anchorMonth = month(anchorTime, tz)
+anchorDay   = dayofmonth(anchorTime, tz)
+anchorHour  = hour(anchorTime, tz)
+anchorMin   = minute(anchorTime, tz)
+
+// If latest bar is before 6:30am PT, treat the active session as yesterday
+anchorBeforeOpen = anchorHour < 6 or (anchorHour == 6 and anchorMin < 30)
+
+sessionAnchorTime = anchorBeforeOpen ? anchorTime - 24 * 60 * 60 * 1000 : anchorTime
+
+sessionYear  = year(sessionAnchorTime, tz)
+sessionMonth = month(sessionAnchorTime, tz)
+sessionDay   = dayofmonth(sessionAnchorTime, tz)
+
+// === BAR DATE ===
+barYear  = year(time, tz)
+barMonth = month(time, tz)
+barDay   = dayofmonth(time, tz)
+
+// === CURRENT ACTIVE SESSION ===
+isActiveSessionDay = barYear == sessionYear and barMonth == sessionMonth and barDay == sessionDay
+inSession = not na(time(timeframe.period, visibleSession, tz))
+
+showBar = isActiveSessionDay and inSession
+
+// === HIDE NON-ACTIVE-SESSION CANDLES ===
+barcolor(showBar ? na : color.new(color.black, hideOpacity))

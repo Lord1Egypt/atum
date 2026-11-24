@@ -1,0 +1,15 @@
+//@version=5
+indicator("math/avg")
+// Test math.avg with variadic arguments
+result1 = math.avg(5, 3)
+result2 = math.avg(10, 5, 3, 8)
+result3 = math.avg(2.0, 4.0, 6.0)
+
+log.info(str.tostring(result1))
+log.info(str.tostring(result2))
+log.info(str.tostring(result3))
+
+// Expected output:
+// 4
+// 6.5
+// 4

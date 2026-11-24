@@ -1,0 +1,46 @@
+//@version=6
+indicator("MTF EMA — Non-Repainting", shorttitle="MTF EMA NR", overlay=true)
+
+// ---------- Inputs ----------
+htf         = input.timeframe("60",  "Higher timeframe")
+lenFast     = input.int(21,          "Fast EMA length", minval=1)
+lenSlow     = input.int(50,          "Slow EMA length", minval=1)
+srcInput    = input.source(close,    "Source")
+showRepaint = input.bool(false,      "Overlay repainting version (comparison)")
+
+// ---------- Guard ----------
+// A higher timeframe lower than the chart timeframe produces meaningless data.
+if barstate.islast and timeframe.in_seconds(htf) < timeframe.in_seconds(timeframe.period)
+    runtime.error("Higher timeframe must be greater than or equal to the chart timeframe.")
+
+// ---------- Local calculations ----------
+emaFast = ta.ema(srcInput, lenFast)
+emaSlow = ta.ema(srcInput, lenSlow)
+
+// ---------- Higher timeframe, non-repainting ----------
+// Requesting the [1] offset together with lookahead_on returns the value of
+// the last CLOSED higher-timeframe bar. That value is identical on historical
+// bars and in realtime, which is precisely what stops the plot from repainting.
+htfFast = request.security(syminfo.tickerid, htf, emaFast[1], lookahead = barmerge.lookahead_on)
+htfSlow = request.security(syminfo.tickerid, htf, emaSlow[1], lookahead = barmerge.lookahead_on)
+
+// The naive call below is what most scripts use. It updates on every tick of the
+// forming higher-timeframe bar, so signals appear and disappear during the bar.
+htfFastRepaint = request.security(syminfo.tickerid, htf, emaFast)
+htfSlowRepaint = request.security(syminfo.tickerid, htf, emaSlow)
+
+// ---------- Plots ----------
+plot(htfFast, "HTF fast EMA", color = color.new(color.teal,   0), linewidth = 2)
+plot(htfSlow, "HTF slow EMA", color = color.new(color.orange, 0), linewidth = 2)
+plot(showRepaint ? htfFastRepaint : na, "Fast (repainting)", color = color.new(color.teal,   65))
+plot(showRepaint ? htfSlowRepaint : na, "Slow (repainting)", color = color.new(color.orange, 65))
+
+// ---------- Signals ----------
+bullCross = ta.crossover(htfFast,  htfSlow)
+bearCross = ta.crossunder(htfFast, htfSlow)
+
+plotshape(bullCross, "Bull cross", shape.triangleup,   location.belowbar, color.teal,   size = size.tiny)
+plotshape(bearCross, "Bear cross", shape.triangledown, location.abovebar, color.orange, size = size.tiny)
+
+alertcondition(bullCross, "HTF bull cross", "{{ticker}} — HTF fast EMA crossed above slow EMA")
+alertcondition(bearCross, "HTF bear cross", "{{ticker}} — HTF fast EMA crossed below slow EMA")

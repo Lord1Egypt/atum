@@ -1,0 +1,44 @@
+// Pine Script table: an on-chart dashboard example
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/table-dashboard
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Market dashboard", overlay = true)
+
+rsiLen   = input.int(14, "RSI length", minval = 2)
+atrLen   = input.int(14, "ATR length", minval = 1)
+trendLen = input.int(50, "Trend SMA length", minval = 2)
+corner   = input.string("Top right", "Position", options = ["Top right", "Bottom right", "Bottom left", "Top left"])
+
+rsi    = ta.rsi(close, rsiLen)
+atr    = ta.atr(atrLen)
+trend  = ta.sma(close, trendLen)
+volAvg = ta.sma(volume, 20)
+chgPct = (close - close[1]) / close[1] * 100
+
+tablePos = switch corner
+    "Bottom right" => position.bottom_right
+    "Bottom left"  => position.bottom_left
+    "Top left"     => position.top_left
+    => position.top_right
+
+// Created once: 2 columns, 7 rows
+var table dash = table.new(tablePos, 2, 7, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1)
+
+// Writes one row: the name on the left, the value on the right
+row(table t, int r, string name, string value, color bg) =>
+    t.cell(0, r, name, text_color = color.silver, text_halign = text.align_left, text_size = size.small)
+    t.cell(1, r, value, text_color = color.white, bgcolor = bg, text_halign = text.align_right, text_size = size.small)
+
+if barstate.islast
+    color chgBg   = chgPct >= 0 ? color.new(color.teal, 60) : color.new(color.red, 60)
+    color rsiBg   = rsi > 70 ? color.new(color.red, 50) : rsi < 30 ? color.new(color.green, 50) : na
+    color trendBg = close > trend ? color.new(color.teal, 60) : color.new(color.red, 60)
+    float relVol  = volAvg > 0 ? volume / volAvg : na
+    row(dash, 0, syminfo.ticker, timeframe.period, na)
+    row(dash, 1, "Close", str.tostring(close, format.mintick), na)
+    row(dash, 2, "Change", str.tostring(chgPct, "#.##") + "%", chgBg)
+    row(dash, 3, "RSI " + str.tostring(rsiLen), str.tostring(rsi, "#.0"), rsiBg)
+    row(dash, 4, "ATR, % of price", str.tostring(atr / close * 100, "#.##") + "%", na)
+    row(dash, 5, "Trend vs SMA " + str.tostring(trendLen), close > trend ? "Above" : "Below", trendBg)
+    row(dash, 6, "Relative volume", na(relVol) ? "n/a" : str.tostring(relVol, "#.##") + "x", na)

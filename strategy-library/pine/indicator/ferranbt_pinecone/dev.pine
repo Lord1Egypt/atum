@@ -1,0 +1,15 @@
+//@version=5
+indicator("ta/dev")
+// Test ta.dev (Mean Absolute Deviation)
+// Like Pine, na until the window has `length` bars. Over the last 3 bars close
+// is 299, 300, 301: mean 300, so (1 + 0 + 1) / 3.
+
+// Bars: 3
+
+d = ta.dev(close, 3)
+log.info(str.tostring(d))
+
+// Expected output:
+// NaN
+// NaN
+// 0.6666666666666666

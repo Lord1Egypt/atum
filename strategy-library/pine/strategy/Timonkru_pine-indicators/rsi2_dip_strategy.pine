@@ -1,0 +1,128 @@
+//@version=6
+// RSI(2) Dip Above SMA200 — Strategy. Companion of "RSI(2) Dip Above SMA200 — Signals":
+// one rule, two scripts. The "Rule core" block is identical in both. The script decides every
+// trade itself and only mirrors it with orders, so the trade list matches the indicator labels.
+//
+// Rule (fixed values on purpose, these are the researched ones):
+//   buy at the daily close when RSI(2, Wilder) < 10 and the close is above its SMA200;
+//   sell at the first later close above SMA5, at the latest after 20 closes;
+//   a rule exit may buy again at the same close; protective stop = entry close - 3 x ATR10
+//   (ATR10 = simple mean of the true range, not Wilder), active from the next bar;
+//   after a stop no new entry on that same bar; long only, weekends are held.
+//
+// The rule is defined on the regular cash session of the index (16:00 New York close).
+// On SPY/QQQ/DIA or SPX/NDX/DJI the 1D bar is that session. On CFD or futures charts the
+// 1D bar usually ends at the broker's day end and includes the night: signals, ATR and
+// stops will differ, and the table warns about it.
+//
+// Execution notes:
+//   - Fills at the bar close (process_orders_on_close = true) because the rule is defined at
+//     the close. TradingView's default would be the next open, which is a different rule.
+//   - The stop is a resting order on the 1D bar, filled at the stop or at the open on a gap.
+//   - No overnight financing in TradingView: the default commission 0.04 % per side (8 bps per
+//     round trip) stands in for spread plus the financing of a long index CFD held a few nights.
+//     Change it in Properties > Commission; a zero-cost backtest overstates this rule.
+//   - Re-entry at the exit close needs two entry IDs at once, hence pyramiding = 2. The script
+//     never holds two positions.
+//   - margin_long = 0: Pine v6 defaults to 100 % margin and silently skips entries it cannot
+//     fund, which with risk sizing would filter trades by stop width.
+strategy("RSI(2) Dip Above SMA200 — Strategy", shorttitle = "RSI2 Dip S", overlay = true, initial_capital = 100000,
+     process_orders_on_close = true, pyramiding = 2, margin_long = 0, margin_short = 0,
+     commission_type = strategy.commission.percent, commission_value = 0.04, slippage = 1,
+     default_qty_type = strategy.fixed, default_qty_value = 1)
+
+//---- inputs -----------------------------------------------------------
+grpRule = "Rule"
+startTime = input.time(timestamp("2000-01-01T00:00:00"), "Signals from", group = grpRule,
+     tooltip = "Entries before this date are ignored. The research starts in 2000.")
+stopMult  = input.float(3.0, "Protective stop (x ATR10)", minval = 1.0, maxval = 10.0, step = 0.5, group = grpRule,
+     tooltip = "Tested value 3. Accepted range 1 to 10.")
+
+grpSize   = "Position size"
+sizeMode  = input.string("Risk % at the stop", "Sizing mode", options = ["Risk % at the stop", "Position value % of equity"], group = grpSize)
+riskPct   = input.float(0.5, "Risk per trade (% of equity)", minval = 0.01, maxval = 10.0, step = 0.05, group = grpSize,
+     tooltip = "Default 0.5 %. Loss at the stop, before costs and gaps.")
+valuePct  = input.float(100.0, "Position value (% of equity)", minval = 1.0, maxval = 1000.0, step = 10.0, group = grpSize)
+
+grpView   = "Display"
+showSma   = input.bool(true, "Show SMA200 and SMA5", group = grpView)
+
+//---- rule constants -----------------------------------------------------
+RSI_LEVEL = 10.0
+SMA_TREND = 200
+SMA_EXIT  = 5
+ATR_LEN   = 10
+MAX_HOLD  = 20
+
+if not timeframe.isdaily or timeframe.multiplier != 1
+    runtime.error("This script uses daily bars. Switch the chart to 1D.")
+
+//==== Rule core (identical in the Signals and the Strategy script) ====
+rsi2   = ta.rsi(close, 2)
+sma200 = ta.sma(close, SMA_TREND)
+sma5   = ta.sma(close, SMA_EXIT)
+atr10  = ta.sma(ta.tr(true), ATR_LEN)
+
+var bool  inPos    = false
+var float entryPx  = na
+var float stopPx   = na
+var float entryAtr = na
+var int   entryBar = na
+var int   entryT   = na
+
+bool   didEnter = false
+bool   didExit  = false
+float  exitPx   = na
+string exitWhy  = ""
+int    exitBar0 = na
+int    exitT0   = na
+float  exitEnt  = na
+float  exitAtr  = na
+
+if barstate.isconfirmed
+    bool stopped = false
+    if inPos and bar_index > entryBar
+        if low <= stopPx
+            exitPx  := math.min(open, stopPx)
+            exitWhy := "stop"
+            stopped := true
+        else if close > sma5 or bar_index - entryBar >= MAX_HOLD
+            exitPx  := close
+            exitWhy := close > sma5 ? "SMA5" : "20 closes"
+        if not na(exitPx)
+            didExit  := true
+            exitBar0 := entryBar
+            exitT0   := entryT
+            exitEnt  := entryPx
+            exitAtr  := entryAtr
+            inPos    := false
+    bool ready = time >= startTime and high > low and not na(rsi2) and not na(sma200) and not na(atr10)
+    if not inPos and not stopped and ready and rsi2 < RSI_LEVEL and close > sma200
+        inPos    := true
+        didEnter := true
+        entryPx  := close
+        entryAtr := atr10
+        stopPx   := close - stopMult * atr10
+        entryBar := bar_index
+        entryT   := time
+//==== end of rule core ====
+
+//---- orders (strategy only) -------------------------------------------------
+var int    tradeNo = 0
+var string curId   = ""
+
+// a stop exit was already filled by the emulator on this bar; a rule exit is sent at this close
+if didExit and exitWhy != "stop"
+    strategy.close(curId, comment = exitWhy)
+
+if didEnter
+    tradeNo += 1
+    curId := "PD" + str.tostring(tradeNo)
+    float stopDist = stopMult * atr10
+    float qty = sizeMode == "Risk % at the stop" ? strategy.equity * riskPct / 100.0 / (stopDist * syminfo.pointvalue) : strategy.equity * valuePct / 100.0 / (close * syminfo.pointvalue)
+    strategy.entry(curId, strategy.long, qty = qty, comment = "RSI2 " + str.tostring(rsi2, "#.0"))
+    strategy.exit(curId + " stop", from_entry = curId, stop = stopPx, comment = "stop")
+
+plot(showSma ? sma200 : na, "SMA200", color.new(color.orange, 20), 2)
+plot(showSma ? sma5 : na, "SMA5", color.new(color.blue, 40), 1)
+plot(inPos ? stopPx : na, "Protective stop", color.red, 2, plot.style_linebr)

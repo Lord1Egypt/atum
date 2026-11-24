@@ -1,0 +1,13 @@
+//@version=5
+indicator("constants/display")
+// display.* constants resolve to their string tag.
+log.info(str.tostring(display.none))
+log.info(str.tostring(display.all))
+log.info(str.tostring(display.data_window))
+log.info(str.tostring(display.status_line))
+
+// Expected output:
+// none
+// all
+// data_window
+// status_line

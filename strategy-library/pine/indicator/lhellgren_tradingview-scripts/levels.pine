@@ -1,0 +1,404 @@
+//@version=6
+indicator("Levels", overlay=true, max_lines_count=500, max_labels_count=500)
+
+buffer = 0.01
+tz = "America/Los_Angeles"
+
+// === SETTINGS TOGGLES ===
+showOvernight        = input.bool(true,  "Show Overnight High/Low")
+showPremarket        = input.bool(false, "Show Premarket High/Low")
+showPrevDay          = input.bool(true,  "Show Previous Day High/Low")
+showPrevWeek         = input.bool(true,  "Show Previous Week High/Low")
+showOpeningRange     = input.bool(true,  "Show 15m Opening Range High/Low")
+showHistoricalLevels = input.bool(false, "Show Historical Previous Session Levels")
+
+// === TIME DEFINITIONS ===
+currDate  = time("D")
+currYear  = year(currDate)
+currMonth = month(currDate)
+currDay   = dayofmonth(currDate)
+
+today630    = timestamp(tz, currYear, currMonth, currDay, 6, 30)
+tomorrow630 = today630 + 24 * 60 * 60 * 1000
+
+pmEndTime = timestamp(tz, year, month, dayofmonth, 6, 30)
+is630 = time >= pmEndTime and time[1] < pmEndTime
+
+weekday = dayofweek
+var int weekStart630 = na
+if weekday == dayofweek.monday
+    weekStart630 := today630
+else
+    weekStart630 := timestamp(tz, currYear, currMonth, currDay - (weekday - 1), 6, 30)
+
+nextWeekStart630 = weekStart630 + 7 * 24 * 60 * 60 * 1000
+
+// === EXTENDED SESSION TICKER ===
+extTicker = ticker.new(syminfo.prefix, syminfo.ticker, session.extended)
+
+// === OVERNIGHT RANGE FROM EXTENDED DATA ===
+overnightSession = "1300-0630:1234567"
+
+f_overnight() =>
+    var float onHigh = na
+    var float onLow  = na
+    var float lockedHigh = na
+    var float lockedLow  = na
+
+    inON = not na(time(timeframe.period, overnightSession, tz))
+    onStart = inON and not inON[1]
+    onEnd   = not inON and inON[1]
+
+    if onStart
+        onHigh := high
+        onLow  := low
+
+    if inON
+        onHigh := na(onHigh) ? high : math.max(onHigh, high)
+        onLow  := na(onLow)  ? low  : math.min(onLow, low)
+
+    if onEnd
+        lockedHigh := onHigh
+        lockedLow  := onLow
+        onHigh := na
+        onLow  := na
+
+    [lockedHigh, lockedLow]
+
+[overnightHigh, overnightLow] = request.security(
+     extTicker,
+     timeframe.period,
+     f_overnight(),
+     barmerge.gaps_off,
+     barmerge.lookahead_off
+)
+
+// === PREMARKET RANGE FROM EXTENDED DATA ===
+premarketSession = "0100-0630:1234567"
+
+f_premarket() =>
+    var float pmHigh = na
+    var float pmLow  = na
+    var float lockedHigh = na
+    var float lockedLow  = na
+
+    inPM = not na(time(timeframe.period, premarketSession, tz))
+    pmStart = inPM and not inPM[1]
+    pmEnd   = not inPM and inPM[1]
+
+    if pmStart
+        pmHigh := high
+        pmLow  := low
+
+    if inPM
+        pmHigh := na(pmHigh) ? high : math.max(pmHigh, high)
+        pmLow  := na(pmLow)  ? low  : math.min(pmLow, low)
+
+    if pmEnd
+        lockedHigh := pmHigh
+        lockedLow  := pmLow
+        pmHigh := na
+        pmLow  := na
+
+    [lockedHigh, lockedLow]
+
+[prevPremarketHigh, prevPremarketLow] = request.security(
+     extTicker,
+     timeframe.period,
+     f_premarket(),
+     barmerge.gaps_off,
+     barmerge.lookahead_off
+)
+
+// === TRACK DAY/WEEK LEVELS ===
+var float dayHigh      = na
+var float dayLow       = na
+var float prevDayHigh  = na
+var float prevDayLow   = na
+var float weekHigh     = na
+var float weekLow      = na
+var float prevWeekHigh = na
+var float prevWeekLow  = na
+
+isNewDay = ta.change(time("D")) != 0
+if isNewDay
+    prevDayHigh := dayHigh
+    prevDayLow  := dayLow
+    dayHigh := high
+    dayLow  := low
+else
+    dayHigh := na(dayHigh) ? high : math.max(dayHigh, high)
+    dayLow  := na(dayLow)  ? low  : math.min(dayLow, low)
+
+isNewWeek = ta.change(time("W")) != 0
+if isNewWeek
+    prevWeekHigh := weekHigh
+    prevWeekLow  := weekLow
+    weekHigh := high
+    weekLow  := low
+else
+    weekHigh := na(weekHigh) ? high : math.max(weekHigh, high)
+    weekLow  := na(weekLow)  ? low  : math.min(weekLow, low)
+
+// === 15m OPENING RANGE ===
+var float orHigh     = na
+var float orLow      = na
+var float prevOrHigh = na
+var float prevOrLow  = na
+
+var line  orHighLine  = na
+var line  orLowLine   = na
+var label orHighLabel = na
+var label orLowLabel  = na
+
+orStartTime = timestamp(tz, year, month, dayofmonth, 6, 30)
+orEndTime   = timestamp(tz, year, month, dayofmonth, 6, 45)
+
+isORWindow = time >= orStartTime and time < orEndTime
+is645 = time >= orEndTime and time[1] < orEndTime
+
+hideOR = time >= orStartTime and time < orEndTime
+
+if is630
+    prevOrHigh := na
+    prevOrLow  := na
+    orHigh := na
+    orLow  := na
+
+    if not na(orHighLine)
+        line.delete(orHighLine)
+        orHighLine := na
+    if not na(orLowLine)
+        line.delete(orLowLine)
+        orLowLine := na
+
+    if not na(orHighLabel)
+        label.delete(orHighLabel)
+        orHighLabel := na
+    if not na(orLowLabel)
+        label.delete(orLowLabel)
+        orLowLabel := na
+
+if isORWindow
+    orHigh := na(orHigh) ? high : math.max(orHigh, high)
+    orLow  := na(orLow)  ? low  : math.min(orLow, low)
+
+if is645
+    prevOrHigh := orHigh
+    prevOrLow  := orLow
+    orHigh := na
+    orLow  := na
+
+// === LINES ===
+var line dHighLine  = na
+var line dLowLine   = na
+var line wHighLine  = na
+var line wLowLine   = na
+var line pmHighLine = na
+var line pmLowLine  = na
+var line onHighLine = na
+var line onLowLine  = na
+
+if not showOvernight
+    if not na(onHighLine)
+        line.delete(onHighLine)
+        onHighLine := na
+    if not na(onLowLine)
+        line.delete(onLowLine)
+        onLowLine := na
+
+if not showPrevDay
+    if not na(dHighLine)
+        line.delete(dHighLine)
+        dHighLine := na
+    if not na(dLowLine)
+        line.delete(dLowLine)
+        dLowLine := na
+
+if not showPrevWeek
+    if not na(wHighLine)
+        line.delete(wHighLine)
+        wHighLine := na
+    if not na(wLowLine)
+        line.delete(wLowLine)
+        wLowLine := na
+
+if not showOpeningRange
+    if not na(orHighLine)
+        line.delete(orHighLine)
+        orHighLine := na
+    if not na(orLowLine)
+        line.delete(orLowLine)
+        orLowLine := na
+
+if showOvernight and not na(overnightHigh)
+    if na(onHighLine)
+        onHighLine := line.new(today630, overnightHigh, tomorrow630, overnightHigh, xloc=xloc.bar_time, color=color.white, width=1)
+    else
+        line.set_xy1(onHighLine, today630, overnightHigh)
+        line.set_xy2(onHighLine, tomorrow630, overnightHigh)
+
+if showOvernight and not na(overnightLow)
+    if na(onLowLine)
+        onLowLine := line.new(today630, overnightLow, tomorrow630, overnightLow, xloc=xloc.bar_time, color=color.white, width=1)
+    else
+        line.set_xy1(onLowLine, today630, overnightLow)
+        line.set_xy2(onLowLine, tomorrow630, overnightLow)
+
+if showPrevDay and not na(prevDayHigh)
+    if na(dHighLine)
+        dHighLine := line.new(today630, prevDayHigh, tomorrow630, prevDayHigh, xloc=xloc.bar_time, color=color.green, width=1)
+    else
+        line.set_xy1(dHighLine, today630, prevDayHigh)
+        line.set_xy2(dHighLine, tomorrow630, prevDayHigh)
+
+if showPrevDay and not na(prevDayLow)
+    if na(dLowLine)
+        dLowLine := line.new(today630, prevDayLow, tomorrow630, prevDayLow, xloc=xloc.bar_time, color=color.red, width=1)
+    else
+        line.set_xy1(dLowLine, today630, prevDayLow)
+        line.set_xy2(dLowLine, tomorrow630, prevDayLow)
+
+if showPrevWeek and not na(prevWeekHigh)
+    if na(wHighLine)
+        wHighLine := line.new(weekStart630, prevWeekHigh, nextWeekStart630, prevWeekHigh, xloc=xloc.bar_time, color=color.rgb(0, 100, 0), width=1)
+    else
+        line.set_xy1(wHighLine, weekStart630, prevWeekHigh)
+        line.set_xy2(wHighLine, nextWeekStart630, prevWeekHigh)
+
+if showPrevWeek and not na(prevWeekLow)
+    if na(wLowLine)
+        wLowLine := line.new(weekStart630, prevWeekLow, nextWeekStart630, prevWeekLow, xloc=xloc.bar_time, color=color.rgb(139, 0, 0), width=1)
+    else
+        line.set_xy1(wLowLine, weekStart630, prevWeekLow)
+        line.set_xy2(wLowLine, nextWeekStart630, prevWeekLow)
+
+if not showPremarket
+    if not na(pmHighLine)
+        line.delete(pmHighLine)
+        pmHighLine := na
+    if not na(pmLowLine)
+        line.delete(pmLowLine)
+        pmLowLine := na
+
+if showPremarket and not na(prevPremarketHigh)
+    if na(pmHighLine)
+        pmHighLine := line.new(today630, prevPremarketHigh, tomorrow630, prevPremarketHigh, xloc=xloc.bar_time, color=color.purple, width=1)
+    else
+        line.set_xy1(pmHighLine, today630, prevPremarketHigh)
+        line.set_xy2(pmHighLine, tomorrow630, prevPremarketHigh)
+
+if showPremarket and not na(prevPremarketLow)
+    if na(pmLowLine)
+        pmLowLine := line.new(today630, prevPremarketLow, tomorrow630, prevPremarketLow, xloc=xloc.bar_time, color=color.purple, width=1)
+    else
+        line.set_xy1(pmLowLine, today630, prevPremarketLow)
+        line.set_xy2(pmLowLine, tomorrow630, prevPremarketLow)
+
+if showOpeningRange and not na(prevOrHigh) and not hideOR
+    if na(orHighLine)
+        orHighLine := line.new(orStartTime, prevOrHigh, tomorrow630, prevOrHigh, xloc=xloc.bar_time, color=color.aqua, width=1)
+    else
+        line.set_xy1(orHighLine, orStartTime, prevOrHigh)
+        line.set_xy2(orHighLine, tomorrow630, prevOrHigh)
+
+if showOpeningRange and not na(prevOrLow) and not hideOR
+    if na(orLowLine)
+        orLowLine := line.new(orStartTime, prevOrLow, tomorrow630, prevOrLow, xloc=xloc.bar_time, color=color.aqua, width=1)
+    else
+        line.set_xy1(orLowLine, orStartTime, prevOrLow)
+        line.set_xy2(orLowLine, tomorrow630, prevOrLow)
+
+// === LABELS ===
+var label dHighLabel  = na
+var label dLowLabel   = na
+var label wHighLabel  = na
+var label wLowLabel   = na
+var label pmHighLabel = na
+var label pmLowLabel  = na
+var label onHighLabel = na
+var label onLowLabel  = na
+
+labelX = bar_index + 9
+
+if not showOvernight
+    if not na(onHighLabel)
+        label.delete(onHighLabel)
+        onHighLabel := na
+    if not na(onLowLabel)
+        label.delete(onLowLabel)
+        onLowLabel := na
+
+if not showPrevDay
+    if not na(dHighLabel)
+        label.delete(dHighLabel)
+        dHighLabel := na
+    if not na(dLowLabel)
+        label.delete(dLowLabel)
+        dLowLabel := na
+
+if not showPrevWeek
+    if not na(wHighLabel)
+        label.delete(wHighLabel)
+        wHighLabel := na
+    if not na(wLowLabel)
+        label.delete(wLowLabel)
+        wLowLabel := na
+
+if not showOpeningRange
+    if not na(orHighLabel)
+        label.delete(orHighLabel)
+        orHighLabel := na
+    if not na(orLowLabel)
+        label.delete(orLowLabel)
+        orLowLabel := na
+
+if showOvernight and not na(overnightHigh)
+    if na(onHighLabel)
+        onHighLabel := label.new(labelX, overnightHigh, "ON High: " + str.tostring(overnightHigh), textcolor=color.white, style=label.style_none, size=size.small)
+    else
+        label.set_xy(onHighLabel, labelX, overnightHigh)
+        label.set_text(onHighLabel, "ON High: " + str.tostring(overnightHigh))
+
+if showOvernight and not na(overnightLow)
+    if na(onLowLabel)
+        onLowLabel := label.new(labelX, overnightLow, "ON Low: " + str.tostring(overnightLow), textcolor=color.white, style=label.style_none, size=size.small)
+    else
+        label.set_xy(onLowLabel, labelX, overnightLow)
+        label.set_text(onLowLabel, "ON Low: " + str.tostring(overnightLow))
+
+if showPrevDay and not na(prevDayHigh)
+    if na(dHighLabel)
+        dHighLabel := label.new(labelX, prevDayHigh, "PD High: " + str.tostring(prevDayHigh), textcolor=color.green, style=label.style_none, size=size.small)
+    else
+        label.set_xy(dHighLabel, labelX, prevDayHigh)
+        label.set_text(dHighLabel, "PD High: " + str.tostring(prevDayHigh))
+
+if showPrevDay and not na(prevDayLow)
+    if na(dLowLabel)
+        dLowLabel := label.new(labelX, prevDayLow, "PD Low: " + str.tostring(prevDayLow), textcolor=color.red, style=label.style_none, size=size.small)
+    else
+        label.set_xy(dLowLabel, labelX, prevDayLow)
+        label.set_text(dLowLabel, "PD Low: " + str.tostring(prevDayLow))
+
+if showPrevWeek and not na(prevWeekHigh)
+    if na(wHighLabel)
+        wHighLabel := label.new(labelX, prevWeekHigh, "PW High: " + str.tostring(prevWeekHigh), textcolor=color.rgb(0, 100, 0), style=label.style_none, size=size.small)
+    else
+        label.set_xy(wHighLabel, labelX, prevWeekHigh)
+        label.set_text(wHighLabel, "PW High: " + str.tostring(prevWeekHigh))
+
+if showPrevWeek and not na(prevWeekLow)
+    if na(wLowLabel)
+        wLowLabel := label.new(labelX, prevWeekLow, "PW Low: " + str.tostring(prevWeekLow), textcolor=color.rgb(139, 0, 0), style=label.style_none, size=size.small)
+    else
+        label.set_xy(wLowLabel, labelX, prevWeekLow)
+        label.set_text(wLowLabel, "PW Low: " + str.tostring(prevWeekLow))
+
+if not showPremarket
+    if not na(pmHighLabel)
+        label.delete(pmHighLabel)
+        pmHighLabel := na
+    if not na(pmLowLabel)
+        label.delete(pmLowLabel)
+        pmLowL

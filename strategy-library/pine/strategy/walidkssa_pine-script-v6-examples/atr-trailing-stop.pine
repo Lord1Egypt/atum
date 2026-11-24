@@ -1,0 +1,51 @@
+// Pine Script ATR trailing stop strategy (v6 example)
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/atr-trailing-stop
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+strategy("ATR trailing stop", overlay = true, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, commission_type = strategy.commission.percent, commission_value = 0.05, slippage = 2)
+
+atrLen   = input.int(14, "ATR length", minval = 1)
+trailMul = input.float(3.0, "Trail distance (x ATR)", minval = 0.5, step = 0.25)
+entryLen = input.int(55, "Breakout lookback (bars)", minval = 2)
+
+atr     = ta.atr(atrLen)
+hiPrev  = ta.highest(high, entryLen)[1]
+loPrev  = ta.lowest(low, entryLen)[1]
+longIn  = ta.crossover(close, hiPrev)
+shortIn = ta.crossunder(close, loPrev)
+
+// Where a fresh stop would go on this bar
+float longCand  = close - trailMul * atr
+float shortCand = close + trailMul * atr
+
+var float longStop  = na
+var float shortStop = na
+
+// Ratchet: a long stop can only rise, a short stop can only fall
+if strategy.position_size > 0
+    longStop := math.max(nz(longStop, longCand), longCand)
+if strategy.position_size < 0
+    shortStop := math.min(nz(shortStop, shortCand), shortCand)
+
+// Flat: forget the old stops, and set the first one on the signal bar
+if strategy.position_size == 0
+    longStop  := na
+    shortStop := na
+    if longIn
+        strategy.entry("Long", strategy.long)
+        longStop := longCand
+    else if shortIn
+        strategy.entry("Short", strategy.short)
+        shortStop := shortCand
+
+// The same exit ID each bar replaces the order with the new level
+if not na(longStop)
+    strategy.exit("Long trail", "Long", stop = longStop)
+if not na(shortStop)
+    strategy.exit("Short trail", "Short", stop = shortStop)
+
+plot(longStop, "Long stop", color.teal, 2, plot.style_linebr)
+plot(shortStop, "Short stop", color.red, 2, plot.style_linebr)
+plot(hiPrev, "Breakout high", color.new(color.gray, 50))
+plot(loPrev, "Breakout low", color.new(color.gray, 50))

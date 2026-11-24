@@ -1,0 +1,47 @@
+// Detect higher highs and lower lows in Pine Script
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/higher-high-lower-low
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Higher highs and lower lows", overlay = true)
+
+swingLen = input.int(5, "Swing strength (bars each side)", minval = 1)
+stairLen = input.int(3, "Staircase: bars in a row", minval = 2, maxval = 10)
+
+// Bar by bar: consecutive bars with a higher high and a higher low (or lower and lower)
+var int upRun   = 0
+var int downRun = 0
+upRun   := high > high[1] and low > low[1] ? upRun + 1 : 0
+downRun := high < high[1] and low < low[1] ? downRun + 1 : 0
+
+// Swings, confirmed swingLen bars after they happen
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+bool newHigh = not na(ph)
+bool newLow  = not na(pl)
+
+// The last two swing highs and the last two swing lows
+float hi0 = ta.valuewhen(newHigh, ph, 0)
+float hi1 = ta.valuewhen(newHigh, ph, 1)
+float lo0 = ta.valuewhen(newLow, pl, 0)
+float lo1 = ta.valuewhen(newLow, pl, 1)
+
+bool higherHigh = newHigh and hi0 > hi1
+bool lowerHigh  = newHigh and hi0 < hi1
+bool higherLow  = newLow and lo0 > lo1
+bool lowerLow   = newLow and lo0 < lo1
+
+// Structure on every bar: the last swing high and the last swing low point the same way
+bool upStructure   = hi0 > hi1 and lo0 > lo1
+bool downStructure = hi0 < hi1 and lo0 < lo1
+
+bgcolor(upStructure ? color.new(color.teal, 92) : downStructure ? color.new(color.red, 92) : na, title = "Structure")
+barcolor(upRun >= stairLen ? color.teal : downRun >= stairLen ? color.red : na, title = "Staircase")
+plotshape(higherHigh, "Higher high", shape.triangleup, location.abovebar, color.teal, offset = -swingLen, size = size.tiny)
+plotshape(lowerHigh, "Lower high", shape.triangledown, location.abovebar, color.orange, offset = -swingLen, size = size.tiny)
+plotshape(higherLow, "Higher low", shape.triangleup, location.belowbar, color.teal, offset = -swingLen, size = size.tiny)
+plotshape(lowerLow, "Lower low", shape.triangledown, location.belowbar, color.red, offset = -swingLen, size = size.tiny)
+
+// Fire on the confirmation bar, swingLen bars after the swing itself
+alertcondition(higherLow and upStructure, "Higher low in an uptrend", "Higher low confirmed on {{ticker}}")
+alertcondition(lowerHigh and downStructure, "Lower high in a downtrend", "Lower high confirmed on {{ticker}}")

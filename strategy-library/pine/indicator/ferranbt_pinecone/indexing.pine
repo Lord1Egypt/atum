@@ -1,0 +1,28 @@
+//@version=5
+indicator("series/indexing")
+// Test series indexing (accessing historical values)
+//
+// A series' history accumulates as bars execute, so a lookback deeper than the
+// number of bars run so far is na. Over the last 3 bars close is 299, 300, 301.
+
+// Bars: 3
+
+// Current bar
+log.info(str.tostring(close[0]))
+
+// Previous bar — na until a second bar has run
+log.info(str.tostring(close[1]))
+
+// Two bars back — na until a third has run
+log.info(str.tostring(close[2]))
+
+// Expected output:
+// 299
+// NaN
+// NaN
+// 300
+// 299
+// NaN
+// 301
+// 300
+// 299

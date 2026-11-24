@@ -1,0 +1,65 @@
+//@version=6
+// SPDX-License-Identifier: MIT
+// © 2026 Bader Alrashdi — https://github.com/bader61888/saudi-pine-toolkit
+indicator("Wyckoff Spring Upthrust", shorttitle="WySpring", overlay=true)
+
+// Cardwell RSI range regime: 1 = bull range (RSI holds 40-80), -1 = bear range (RSI holds 20-60), 0 = neutral
+cardwellRsiRange(series float src, simple int rsiLen, simple int lookback) =>
+    float r = ta.rsi(src, rsiLen)
+    float lo = ta.lowest(r, lookback)
+    float hi = ta.highest(r, lookback)
+    int regime = lo >= 40 ? 1 : hi <= 60 ? -1 : 0
+    [r, regime]
+
+// Cardwell reversals (confirmed pivotLen bars late). Positive: price higher low + RSI lower low. Negative: price lower high + RSI higher high.
+rsiReversals(series float src, simple int rsiLen, simple int pivotLen) =>
+    float r = ta.rsi(src, rsiLen)
+    bool pl = not na(ta.pivotlow(r, pivotLen, pivotLen))
+    bool ph = not na(ta.pivothigh(r, pivotLen, pivotLen))
+    float prevRl = ta.valuewhen(pl, r[pivotLen], 1)
+    float prevPl = ta.valuewhen(pl, low[pivotLen], 1)
+    float prevRh = ta.valuewhen(ph, r[pivotLen], 1)
+    float prevPh = ta.valuewhen(ph, high[pivotLen], 1)
+    bool pos = pl and r[pivotLen] < prevRl and low[pivotLen] > prevPl
+    bool neg = ph and r[pivotLen] > prevRh and high[pivotLen] < prevPh
+    [pos, neg]
+
+// Relative volume and relative bar spread vs their SMA
+volumeSpread(simple int len) =>
+    float spread = high - low
+    float avgV = ta.sma(volume, len)
+    float avgS = ta.sma(spread, len)
+    float relVol = avgV > 0 ? volume / avgV : na
+    float relSpread = avgS > 0 ? spread / avgS : na
+    [relVol, relSpread]
+
+// Simple Wyckoff spring / upthrust detector
+wyckoffSpringUpthrust(simple int rangeLen, simple int volLen, simple float volMult) =>
+    float rl = ta.lowest(low, rangeLen)[1]
+    float rh = ta.highest(high, rangeLen)[1]
+    float avgV = ta.sma(volume, volLen)
+    bool hiVol = volume > avgV * volMult
+    bool spring = low < rl and close > rl and hiVol
+    bool upthrust = high > rh and close < rh and hiVol
+    [spring, upthrust]
+
+// True during Tadawul main session: Sun-Thu 10:00-15:00 Asia/Riyadh
+inTadawulSession() =>
+    int d = dayofweek(time, "Asia/Riyadh")
+    int mins = hour(time, "Asia/Riyadh") * 60 + minute(time, "Asia/Riyadh")
+    bool tradingDay = d == dayofweek.sunday or d == dayofweek.monday or d == dayofweek.tuesday or d == dayofweek.wednesday or d == dayofweek.thursday
+    bool inHours = timeframe.isintraday ? (mins >= 600 and mins < 900) : true
+    tradingDay and inHours
+
+rangeLen = input.int(20, "Range Length", minval=5)
+volLen = input.int(20, "Volume SMA Length", minval=2)
+volMult = input.float(1.2, "Volume Multiplier", minval=0.1, step=0.1)
+onlySession = input.bool(false, "Only during Tadawul session")
+
+[spring, upthrust] = wyckoffSpringUpthrust(rangeLen, volLen, volMult)
+bool ok = onlySession ? inTadawulSession() : true
+
+plotshape(spring and ok, "Spring", shape.labelup, location.belowbar, color.green, text="S", textcolor=color.white, size=size.tiny)
+plotshape(upthrust and ok, "Upthrust", shape.labeldown, location.abovebar, color.red, text="UT", textcolor=color.white, size=size.tiny)
+alertcondition(spring and ok, "Spring", "Wyckoff spring detected")
+alertcondition(upthrust and ok, "Upthrust", "Wyckoff upthrust detected")

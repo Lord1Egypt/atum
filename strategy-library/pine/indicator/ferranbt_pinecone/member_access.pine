@@ -1,0 +1,23 @@
+//@version=5
+indicator("control_flow/member_access")
+// Skip PineTS: PineTS color components differ
+// Test member access on objects
+
+// Access color constants from color namespace
+myRed = color.red
+myBlue = color.blue
+myGreen = color.green
+
+// Verify we can use them by extracting RGB components
+r1 = color.r(myRed)
+b1 = color.b(myBlue)
+g1 = color.g(myGreen)
+
+log.info(str.tostring(r1))
+log.info(str.tostring(b1))
+log.info(str.tostring(g1))
+
+// Expected output:
+// 255
+// 255
+// 128

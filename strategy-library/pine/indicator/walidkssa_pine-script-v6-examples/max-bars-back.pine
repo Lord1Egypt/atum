@@ -1,0 +1,37 @@
+// Pine Script max_bars_back: dynamic lookbacks that work
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/max-bars-back
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Average close since the last cross", overlay = true)
+
+maxLook = input.int(1000, "Longest lookback for the loop", minval = 10, maxval = 4900)
+
+fast = ta.ema(close, 20)
+slow = ta.ema(close, 50)
+bool crossed = ta.cross(fast, slow)
+int  since   = ta.barssince(crossed)
+
+// Method 1: loop back over the bars since the cross, reading close[i]
+float loopAvg = na
+if not na(since) and since <= maxLook
+    float total = 0.0
+    for i = 0 to since
+        total += close[i]
+    loopAvg := total / (since + 1)
+// The offsets above can reach 4900 bars in a long trend: keep that much close history from the start
+max_bars_back(close, 5000)
+
+// Method 2: the same average from running totals, with no history at all
+var float runSum   = 0.0
+var int   runCount = 0
+if crossed
+    runSum   := 0.0
+    runCount := 0
+runSum   += close
+runCount += 1
+float runAvg = na(since) ? na : runSum / runCount
+
+plot(loopAvg, "Average since the cross (loop)", color.orange, 3)
+plot(runAvg, "Average since the cross (var)", color.blue, 1)
+plotshape(crossed, "Cross", shape.circle, location.abovebar, color.gray, size = size.tiny)

@@ -1,0 +1,58 @@
+//@version=6
+indicator(title="9 EMA", shorttitle="9 EMA", overlay=true)
+
+// === DISPLAY MODE ===
+emaMode = input.string(
+     defval="9 EMA",
+     title="EMA Display Mode",
+     options=["9 EMA", "Current Session 9 EMA"],
+     group="Display Settings"
+)
+
+// === EMA SETTINGS ===
+len = input.int(9, minval=1, title="Length")
+src = input.source(close, title="Source")
+offset = input.int(title="Offset", defval=0, minval=-500, maxval=500, display=display.none)
+
+// === CURRENT SESSION EMA SETTINGS ===
+tz = "America/Los_Angeles"
+sessionInput = input.session("0630-1315", "RTH Session", group="Current Session EMA Settings")
+
+// === EMA CALCULATION ===
+emaValue = ta.ema(src, len)
+
+// === CURRENT SESSION FILTER ===
+inSession = not na(time(timeframe.period, sessionInput, tz))
+
+anchorTime = last_bar_time
+
+anchorHour = hour(anchorTime, tz)
+anchorMin = minute(anchorTime, tz)
+
+anchorBeforeOpen = anchorHour < 6 or (anchorHour == 6 and anchorMin < 30)
+sessionAnchorTime = anchorBeforeOpen ? anchorTime - 24 * 60 * 60 * 1000 : anchorTime
+
+sessionYear = year(sessionAnchorTime, tz)
+sessionMonth = month(sessionAnchorTime, tz)
+sessionDay = dayofmonth(sessionAnchorTime, tz)
+
+barYear = year(time, tz)
+barMonth = month(time, tz)
+barDay = dayofmonth(time, tz)
+
+isActiveSessionDay = barYear == sessionYear and barMonth == sessionMonth and barDay == sessionDay
+
+showNormalEMA = emaMode == "9 EMA"
+showCurrentSessionEMA = emaMode == "Current Session 9 EMA"
+
+showCurrentBar =
+     showCurrentSessionEMA and
+     isActiveSessionDay and
+     inSession
+
+// === PLOTS ===
+normalEMAPlot = showNormalEMA ? emaValue : na
+currentSessionEMAPlot = showCurrentBar ? emaValue : na
+
+plot(normalEMAPlot, title="9 EMA", color=color.blue, offset=offset)
+plot(currentSessionEMAPlot, title="Current Session 9 EMA", color=color.green, linewidth=1)

@@ -1,0 +1,15 @@
+//@version=5
+indicator("constants/shape")
+// shape.* constants resolve to their string tag.
+log.info(str.tostring(shape.circle))
+log.info(str.tostring(shape.cross))
+log.info(str.tostring(shape.triangleup))
+log.info(str.tostring(shape.labeldown))
+log.info(str.tostring(shape.arrowup))
+
+// Expected output:
+// circle
+// cross
+// triangleup
+// labeldown
+// arrowup

@@ -1,0 +1,9 @@
+//@version=5
+indicator("errors/break_outside_loop")
+// Test break outside loop - should fail
+
+var x = 10
+break
+
+// Expected error:
+// error [break-outside-loop] 6:1: `break` is only valid inside a loop

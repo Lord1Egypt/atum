@@ -1,0 +1,56 @@
+// Pine Script strategy position sizing: equity, cash, risk
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/position-sizing
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+strategy("Position sizing modes", overlay = true, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, commission_type = strategy.commission.percent, commission_value = 0.05, slippage = 2, margin_long = 100, margin_short = 100)
+
+sizing    = input.string("Risk % per trade", "Sizing", options = ["Properties (default qty)", "% of equity", "Fixed cash", "Fixed units", "Risk % per trade"])
+equityPct = input.float(10, "% of equity", minval = 0.1, maxval = 100)
+cashAmt   = input.float(1000, "Cash per trade (account currency)", minval = 1)
+units     = input.float(1, "Units per trade", minval = 0.000001)
+riskPct   = input.float(1, "Risk per trade (% of equity)", minval = 0.1, maxval = 10, step = 0.1)
+stopMult  = input.float(2, "Stop distance (x ATR)", minval = 0.5, step = 0.5)
+targetR   = input.float(2, "Target (x stop distance)", minval = 0.5, step = 0.5)
+wholeOnly = input.bool(false, "Round down to whole units")
+
+atr  = ta.atr(14)
+fast = ta.sma(close, 20)
+slow = ta.sma(close, 50)
+longSignal = ta.crossover(fast, slow)
+
+float stopDist = stopMult * atr
+// Equity in the symbol's currency, and what one unit is worth
+float equity    = strategy.convert_to_symbol(strategy.equity)
+float unitValue = close * syminfo.pointvalue
+
+float rawQty = switch sizing
+    "% of equity"      => equity * equityPct / 100 / unitValue
+    "Fixed cash"       => strategy.convert_to_symbol(cashAmt) / unitValue
+    "Fixed units"      => units
+    "Risk % per trade" => equity * riskPct / 100 / (stopDist * syminfo.pointvalue)
+    => na
+// Never more than the equity can pay for at 100% margin
+float qty = math.min(rawQty, equity / unitValue)
+qty := wholeOnly ? math.floor(qty) : qty
+
+var float stopPrice   = na
+var float targetPrice = na
+if longSignal and strategy.position_size == 0
+    stopPrice   := close - stopDist
+    targetPrice := close + targetR * stopDist
+    if sizing == "Properties (default qty)"
+        // No qty: the order uses default_qty_type and default_qty_value
+        strategy.entry("Long", strategy.long)
+    else if qty > 0
+        strategy.entry("Long", strategy.long, qty = qty)
+if not na(stopPrice)
+    strategy.exit("Exit", "Long", stop = stopPrice, limit = targetPrice)
+
+// Cash lost if the stop is hit, in the symbol's currency, for the size this bar would send
+float riskCash = qty * stopDist * syminfo.pointvalue
+plot(strategy.position_size > 0 ? stopPrice : na, "Stop", color.red, style = plot.style_linebr)
+plot(strategy.position_size > 0 ? targetPrice : na, "Target", color.teal, style = plot.style_linebr)
+plot(qty, "Quantity this bar", display = display.data_window)
+plot(riskCash, "Risk if stopped", display = display.data_window)
+plot(strategy.position_size, "Position size", display = display.data_window)

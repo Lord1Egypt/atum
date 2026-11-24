@@ -1,0 +1,46 @@
+// Pine Script label.new and line.new: drawing examples
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/label-new-line-new
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Swing labels and lines", overlay = true, max_labels_count = 100, max_lines_count = 100)
+
+len     = input.int(5, "Pivot strength (bars each side)", minval = 1)
+keepMax = input.int(30, "Labels to keep", minval = 2, maxval = 100)
+
+ph = ta.pivothigh(high, len, len)
+pl = ta.pivotlow(low, len, len)
+
+// IDs of the labels drawn so far, oldest first
+var array<label> marks = array.new<label>()
+// The previous swing, to join it to the next one
+var int   lastX = na
+var float lastY = na
+// One dashed line, moved to each new swing high instead of drawing another
+var line lastHighLine = na
+
+if not na(ph)
+    // The pivot happened len bars before the bar that confirms it
+    int x = bar_index - len
+    marks.push(label.new(x, ph, str.tostring(ph, format.mintick), style = label.style_label_down, color = color.red, textcolor = color.white, size = size.small))
+    if not na(lastX)
+        line.new(lastX, lastY, x, ph, color = color.gray)
+    lastX := x
+    lastY := ph
+    if na(lastHighLine)
+        lastHighLine := line.new(x, ph, bar_index, ph, extend = extend.right, color = color.red, style = line.style_dashed)
+    else
+        lastHighLine.set_xy1(x, ph)
+        lastHighLine.set_xy2(bar_index, ph)
+
+if not na(pl)
+    int x = bar_index - len
+    marks.push(label.new(x, pl, str.tostring(pl, format.mintick), style = label.style_label_up, color = color.teal, textcolor = color.white, size = size.small))
+    if not na(lastX)
+        line.new(lastX, lastY, x, pl, color = color.gray)
+    lastX := x
+    lastY := pl
+
+// Delete the oldest labels beyond the number to keep
+while marks.size() > keepMax
+    marks.shift().delete()

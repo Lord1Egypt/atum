@@ -1,0 +1,101 @@
+//@version=5
+strategy("Ichimoku + Brooks PA Strategy", overlay=true, commission_type=strategy.commission.percent, commission_value=0.02)
+
+tenkanLen = input.int(9, "Tenkan")
+kijunLen = input.int(26, "Kijun")
+senkouBLen = input.int(52, "Senkou B")
+displacement = input.int(26, "Displacement")
+rrMultiple = input.float(2.0, "Risk:Reward Multiple", step=0.5)
+riskPct = input.float(2.0, "Risk % per trade")
+startTime = input.time(timestamp("2024-01-01 00:00 UTC"), "Backtest Start")
+atrLen = input.int(14, "ATR Length")
+atrStopMult = input.float(0.5, "ATR Stop Buffer x")
+adxLen = input.int(14, "ADX Length")
+adxThreshold = input.float(20, "Min ADX Trend Strength")
+trendBarBodyPct = input.float(50, "Min Trend Bar Body %")
+trendBarClosePct = input.float(60, "Min Trend Bar Close Position %")
+setupExpiryBars = input.int(5, "Signal Expiry Bars")
+
+donchian(len) => math.avg(ta.lowest(low, len), ta.highest(high, len))
+
+tenkan = donchian(tenkanLen)
+kijun = donchian(kijunLen)
+senkouA = math.avg(tenkan, kijun)
+senkouB = donchian(senkouBLen)
+
+plot(tenkan, "Tenkan", color=color.blue)
+plot(kijun, "Kijun", color=color.red)
+saPlot = plot(senkouA, "Senkou A", color=color.green, offset=displacement - 1)
+sbPlot = plot(senkouB, "Senkou B", color=color.maroon, offset=displacement - 1)
+fill(saPlot, sbPlot, color = senkouA > senkouB ? color.new(color.green, 85) : color.new(color.red, 85))
+
+kumoTop = math.max(senkouA, senkouB)
+kumoBottom = math.min(senkouA, senkouB)
+
+bullishTrend = close > kumoTop and tenkan > kijun and senkouA > senkouB
+bearishTrend = close < kumoBottom and tenkan < kijun and senkouA < senkouB
+
+tkCrossUp = ta.crossover(tenkan, kijun)
+tkCrossDown = ta.crossunder(tenkan, kijun)
+
+chikouRef = close[displacement]
+chikouClearAbove = close > chikouRef
+chikouClearBelow = close < chikouRef
+
+inRange = time >= startTime
+
+atrVal = ta.atr(atrLen)
+[diPlus, diMinus, adxValue] = ta.dmi(adxLen, adxLen)
+adxOk = adxValue >= adxThreshold
+
+barRange = high - low
+bodyPct = barRange > 0 ? math.abs(close - open) / barRange * 100 : 0
+closeUpPct = barRange > 0 ? (close - low) / barRange * 100 : 0
+closeDownPct = barRange > 0 ? (high - close) / barRange * 100 : 0
+isBullTrendBar = close > open and bodyPct >= trendBarBodyPct and closeUpPct >= trendBarClosePct
+isBearTrendBar = close < open and bodyPct >= trendBarBodyPct and closeDownPct >= trendBarClosePct
+
+longSignal = bullishTrend and tkCrossUp and chikouClearAbove and isBullTrendBar and adxOk and inRange and strategy.position_size == 0
+shortSignal = bearishTrend and tkCrossDown and chikouClearBelow and isBearTrendBar and adxOk and inRange and strategy.position_size == 0
+
+var float longStop = na
+var float longTarget = na
+var float longQty = na
+var float shortStop = na
+var float shortTarget = na
+var float shortQty = na
+var float pendingLongTrigger = na
+var float pendingShortTrigger = na
+var int pendingLongBar = na
+var int pendingShortBar = na
+
+pendingLongTrigger := longSignal ? high : pendingLongTrigger
+pendingLongBar := longSignal ? bar_index : pendingLongBar
+longStop := longSignal ? kijun - atrVal * atrStopMult : longStop
+longTarget := longSignal ? high + (high - longStop) * rrMultiple : longTarget
+longQty := longSignal ? (strategy.equity * riskPct / 100) / (high - longStop) : longQty
+
+pendingShortTrigger := shortSignal ? low : pendingShortTrigger
+pendingShortBar := shortSignal ? bar_index : pendingShortBar
+shortStop := shortSignal ? kijun + atrVal * atrStopMult : shortStop
+shortTarget := shortSignal ? low - (shortStop - low) * rrMultiple : shortTarget
+shortQty := shortSignal ? (strategy.equity * riskPct / 100) / (shortStop - low) : shortQty
+
+longExpired = not na(pendingLongBar) and (bar_index - pendingLongBar > setupExpiryBars)
+shortExpired = not na(pendingShortBar) and (bar_index - pendingShortBar > setupExpiryBars)
+
+pendingLongTrigger := longExpired ? na : pendingLongTrigger
+pendingShortTrigger := shortExpired ? na : pendingShortTrigger
+
+posSizePrev = strategy.position_size[1]
+justEnteredLong = strategy.position_size > 0 and posSizePrev <= 0
+justEnteredShort = strategy.position_size < 0 and posSizePrev >= 0
+
+pendingLongTrigger := justEnteredLong ? na : pendingLongTrigger
+pendingShortTrigger := justEnteredShort ? na : pendingShortTrigger
+
+strategy.entry("Long", strategy.long, qty=longQty, stop=pendingLongTrigger, when=not na(pendingLongTrigger) and strategy.position_size == 0)
+strategy.exit("Long Exit", "Long", stop=longStop, limit=longTarget)
+
+strategy.entry("Short", strategy.short, qty=shortQty, stop=pendingShortTrigger, when=not na(pendingShortTrigger) and strategy.position_size == 0)
+strategy.exit("Short Exit", "Short", stop=shortStop, limit=shortTarget)

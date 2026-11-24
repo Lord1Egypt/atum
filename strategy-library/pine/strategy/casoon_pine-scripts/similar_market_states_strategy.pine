@@ -1,0 +1,504 @@
+//@version=6
+// ============================================================================
+// Similar Market States [WavesUnchained] — Strategy (standalone)
+// Version: 1.1.0
+// Author: WavesUnchained
+// Build: 2026-11-05 00:00:00
+// ============================================================================
+// Research strategy: trend/momentum continuation, filtered by a k-nearest-
+// neighbour lookup over earlier bars that formed the same setup. A trade is
+// only taken when the most similar past setups, replayed with exactly the
+// trade's own stop and holding period, cleared the cost hurdle.
+//
+// Features:
+//   ✓ Base setup: EMA trend (price side + slope) plus momentum in trend direction
+//   ✓ Four state features (RSI, momentum/ATR, EMA distance/ATR, relative volatility), each scaled by its own rolling stdev
+//   ✓ Neighbours drawn only from past bars that formed the same base setup in the same direction
+//   ✓ Neighbour outcome replays the real trade: entry next open, fixed ATR stop, time exit — no raw-move proxy
+//   ✓ Decision in R (stop distance): lower confidence bound of the neighbour mean must clear the cost in R
+//   ✓ Non-overlapping, index-anchored sampling grid; newest case ends on the previous bar (no lookahead)
+//   ✓ Model on/off switch: same entries, stop and holding period without the filter, for direct comparison
+//   ✓ Standard strategy features: trade direction, confirmed-bar entries, cooldown, break-even, filters, chart-type guard
+//
+// Data Contract:
+//   Price:     REQUIRED   chart symbol (OHLC)
+//   Volume:    NO
+//   OI:        NO
+//   Reference: NO
+//   Verdict:   CFD-safe
+//
+// ============================================================================
+
+strategy("Similar Market States [WavesUnchained] — Strategy", overlay=true,
+     initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     pyramiding=0, margin_long=100, margin_short=100,
+     commission_type=strategy.commission.percent, commission_value=0,
+     slippage=0, calc_on_every_tick=false, calc_on_order_fills=false,
+     process_orders_on_close=false, max_bars_back=5000)
+
+// Synthetische Bar-Preise (Heikin Ashi, Renko …): Orders füllen zu Marktpreisen,
+// der Backtest gilt dort nicht.
+var table chartTypeWarn = table.new(position.bottom_right, 1, 1)
+if (barstate.islastconfirmedhistory or barstate.islast) and not chart.is_standard
+    table.cell(chartTypeWarn, 0, 0, "SMS Strategy · backtest invalid on this chart type",
+         bgcolor = color.new(color.red, 10), text_color = color.white, text_size = size.small)
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+g_model = "Similarity Model"
+useModel    = input.bool(true, "Use Similarity Filter", group=g_model,
+     tooltip="Off: plain trend/momentum base strategy with the same entries, stop and holding period. Exists for a direct with/without comparison.")
+lookback    = input.int(1500, "Search Window (bars)", minval=200, maxval=3000, group=g_model,
+     tooltip="How far back neighbours are searched. Also the window for the rolling stdev that scales each feature.")
+neighbors   = input.int(20, "Nearest Neighbours", minval=5, maxval=50, group=g_model,
+     tooltip="Number of most similar past setups that must be found. Fewer matches within the max distance → no trade.")
+horizon     = input.int(4, "Holding Period (bars)", minval=1, maxval=50, group=g_model,
+     tooltip="Bars a trade is held unless the stop hits first. The neighbour outcomes are replayed with the same period.")
+spacing     = input.int(4, "Min Spacing Between Cases", minval=1, maxval=100, group=g_model,
+     tooltip="Sampling step through history. Never below the holding period, so neighbour outcomes do not overlap.")
+maxDistance = input.float(0.6, "Max Mean Feature Distance", minval=0.01, step=0.05, group=g_model,
+     tooltip="Upper bound on the mean of log(1 + |Δ| / stdev) across the four features. Lower = only very close matches count.")
+minAgreement = input.float(60, "Min Favourable Neighbours (%)", minval=50, maxval=100, step=5, group=g_model,
+     tooltip="Share of neighbours whose replayed trade closed in profit before costs.")
+costHurdle  = input.float(0.15, "Estimated Round-Trip Cost (%)", minval=0, step=0.01, group=g_model,
+     tooltip="Decision threshold only, not deducted in the tester. Estimate entry + exit including spread and slippage. Converted into R (multiples of the current stop distance) for the decision. Set the tester's own costs under Properties.")
+minEdgeR    = input.float(0.05, "Min Edge After Costs (R)", minval=0, step=0.01, group=g_model,
+     tooltip="Extra margin, in multiples of the stop distance, the neighbour estimate must clear on top of the cost.")
+confK       = input.float(1.0, "Uncertainty Discount (SE×)", minval=0, step=0.25, group=g_model,
+     tooltip="The neighbour mean is reduced by this many standard errors (stdev / √neighbours) before it is compared with the cost. 0 = compare the plain mean. Keeps a handful of lucky neighbours from passing as an edge.")
+
+g_trade = "Trend and Trade"
+trendLength    = input.int(200, "EMA Trend Period", minval=20, maxval=500, group=g_trade)
+momentumLength = input.int(5, "Momentum Period", minval=1, maxval=50, group=g_trade)
+stopAtr        = input.float(2, "Fixed Stop Distance (ATR×)", minval=0.25, step=0.25, group=g_trade,
+     tooltip="Stop = signal-bar close ∓ ATR(14) × this value. Set once at entry and never trailed.")
+
+g_strat       = "Strategy"
+tradeDirInput = input.string("Both", "Trade Direction",
+     options=["Both", "Long Only", "Short Only"], group=g_strat,
+     tooltip="Filter entries by direction. Useful for asymmetric instruments.")
+confirmClose  = input.bool(true,  "Entries on Confirmed Bar Only", group=g_strat,
+     tooltip="Only trigger entries on closed bars. Prevents repainting in live trading.")
+cooldownBars  = input.int(0,     "Cooldown Bars After Exit", minval=0, group=g_strat,
+     tooltip="Block new entries for N bars after a position closes. Set 0 to disable.")
+enableBE      = input.bool(false, "Break-Even Stop", group=g_strat,
+     tooltip="Move SL to entry price once the trade is N×ATR in profit. Not part of the neighbour replay — switching it on decouples the trade from what the model evaluated.")
+beATRInput    = input.float(1.0,  "Break-Even Trigger (ATR×)", minval=0.1, step=0.1, group=g_strat,
+     tooltip="ATR distance from entry that triggers the break-even move.")
+
+g_filters     = "Filters"
+useSession    = input.bool(false, "Session Filter", group=g_filters)
+sessionInput  = input.session("0000-2345", "Session", group=g_filters)
+useDateRange  = input.bool(false, "Date Range", group=g_filters)
+dateFrom      = input.time(timestamp("01 Jan 2020 00:00 +0000"), "From", group=g_filters)
+dateTo        = input.time(timestamp("31 Dec 2030 23:59 +0000"), "To",   group=g_filters)
+useMaxDD      = input.bool(false, "Max Drawdown", group=g_filters)
+maxDD         = input.float(20.0, "Max Drawdown (%)", minval=1, step=1, group=g_filters)
+useMaxIntraDD = input.bool(false, "Max Intraday Loss", group=g_filters)
+maxIntraDD    = input.float(5.0,  "Max Intraday Loss (%)", minval=1, step=1, group=g_filters)
+useLossStreak = input.bool(false, "Losing Streak Limit", group=g_filters)
+maxLossStreak = input.int(5,      "Max Consecutive Losses", minval=1, group=g_filters)
+
+// ─── Features ────────────────────────────────────────────────────────────────
+// Alle Merkmale nur aus bereits geschlossenen Kursen.
+float atr             = ta.atr(14)
+float ema             = ta.ema(close, trendLength)
+float rsiFeature      = (ta.rsi(close, 14) - 50.0) / 50.0
+float momentumFeature = atr > 0 ? (close - close[momentumLength]) / atr : na
+float trendFeature    = atr > 0 ? (close - ema) / atr : na
+float relativeAtr     = close > 0 ? atr / close : na
+float typicalVol      = ta.sma(relativeAtr, 100)
+float volFeature      = typicalVol > 0 ? relativeAtr / typicalVol : na
+
+// Jedes Merkmal auf seine eigene Streuung skalieren. Ohne das dominiert die
+// EMA-Distanz (± viele ATR) den Abstand, RSI und Volatilität zählen kaum.
+float rsiSd   = ta.stdev(rsiFeature, lookback)
+float momSd   = ta.stdev(momentumFeature, lookback)
+float trendSd = ta.stdev(trendFeature, lookback)
+float volSd   = ta.stdev(volFeature, lookback)
+
+int trend = close > ema and ema > ema[5] ? 1 : close < ema and ema < ema[5] ? -1 : 0
+// Basis-Setup: Trend plus Momentum in Trendrichtung. Genau das Setup, das auch
+// gehandelt wird — die Nachbarn kommen nur aus Kerzen mit demselben Setup.
+int setupDir = trend == 1 and momentumFeature > 0 ? 1 : trend == -1 and momentumFeature < 0 ? -1 : 0
+
+bool featuresReady = not na(rsiFeature) and not na(momentumFeature) and not na(trendFeature) and not na(volFeature)
+bool scaleReady    = rsiSd > 0 and momSd > 0 and trendSd > 0 and volSd > 0
+// Gleiches Anlaufintervall für Modell und Basisstrategie.
+bool ready = featuresReady and scaleReady and bar_index >= lookback + horizon + math.max(trendLength, 150)
+
+f_dist(float a, float b, float sd) =>
+    math.log(1 + math.abs(a - b) / sd)
+
+// ─── Neighbour search ────────────────────────────────────────────────────────
+float expectedR   = na
+float lowerR      = na
+float agreement   = na
+int   matchCount  = 0
+
+if ready and setupDir != 0
+    array<float> distances = array.new_float(0)
+    array<float> outcomes  = array.new_float(0)
+    int stride = math.max(spacing, horizon)
+    // Jüngster Fall: Signal s mit s + horizon <= bar_index - 1, endet also
+    // spätestens auf der VORHERIGEN Kerze. Raster an absoluten Indizes verankert.
+    int firstOffset = horizon + 1 + (bar_index - horizon - 1) % stride
+    int lastOffset  = horizon + lookback
+    if firstOffset <= lastOffset
+        for offset = firstOffset to lastOffset by stride
+            bool histReady = not na(rsiFeature[offset]) and not na(momentumFeature[offset]) and not na(trendFeature[offset]) and not na(volFeature[offset])
+            if histReady and setupDir[offset] == setupDir and open[offset - 1] > 0
+                float distance = (f_dist(rsiFeature, rsiFeature[offset], rsiSd) + f_dist(momentumFeature, momentumFeature[offset], momSd) + f_dist(trendFeature, trendFeature[offset], trendSd) + f_dist(volFeature, volFeature[offset], volSd)) / 4.0
+                if distance <= maxDistance
+                    // Historischen Trade exakt so nachspielen, wie er gehandelt würde:
+                    // Einstieg Open(s+1), fester Stop ab Close(s), Ausstieg Close(s+horizon).
+                    float entryPx = open[offset - 1]
+                    float stopPx  = close[offset] - setupDir * stopAtr * atr[offset]
+                    float exitPx  = close[offset - horizon]
+                    for k = 1 to horizon
+                        int o = offset - k
+                        if setupDir == 1 and low[o] <= stopPx
+                            exitPx := math.min(open[o], stopPx)
+                            break
+                        if setupDir == -1 and high[o] >= stopPx
+                            exitPx := math.max(open[o], stopPx)
+                            break
+                    // Ergebnis in R (Vielfache des Stop-Abstands): vergleichbar über
+                    // Volatilitätsphasen, anders als eine Prozentbewegung.
+                    float outcome = setupDir * (exitPx - entryPx) / (stopAtr * atr[offset])
+                    if array.size(distances) < neighbors
+                        array.push(distances, distance)
+                        array.push(outcomes, outcome)
+                    else
+                        float worstDistance = array.max(distances)
+                        if distance < worstDistance
+                            int worstIndex = array.indexof(distances, worstDistance)
+                            array.set(distances, worstIndex, distance)
+                            array.set(outcomes, worstIndex, outcome)
+
+    matchCount := array.size(outcomes)
+    if matchCount == neighbors
+        int favorable = 0
+        for i = 0 to matchCount - 1
+            if array.get(outcomes, i) > 0
+                favorable += 1
+        expectedR  := array.avg(outcomes)
+        lowerR     := expectedR - confK * array.stdev(outcomes) / math.sqrt(matchCount)
+        agreement  := 100.0 * favorable / matchCount
+
+// Kosten in R des aktuellen Trades: Prozentkosten relativ zum Stop-Abstand.
+float costR = costHurdle / 100.0 * close / (stopAtr * atr)
+bool modelPass = matchCount == neighbors and lowerR > costR + minEdgeR and agreement >= minAgreement
+
+// ─── Entry gating ────────────────────────────────────────────────────────────
+strategy.risk.max_drawdown(useMaxDD ? maxDD : 100, strategy.percent_of_equity)
+strategy.risk.max_intraday_loss(useMaxIntraDD ? maxIntraDD : 100, strategy.percent_of_equity)
+
+var int _genLossStreak = 0
+if strategy.losstrades > strategy.losstrades[1]
+    _genLossStreak := _genLossStreak + 1
+if strategy.wintrades > strategy.wintrades[1]
+    _genLossStreak := 0
+_genFilterOk = (not useSession or not na(time(timeframe.period, sessionInput))) and
+     (not useDateRange or (time >= dateFrom and time <= dateTo)) and
+     (not useLossStreak or _genLossStreak < maxLossStreak)
+
+var int _lastExitBar = na
+_justClosed = strategy.closedtrades > 0 and strategy.closedtrades.exit_bar_index(strategy.closedtrades - 1) == bar_index
+if _justClosed
+    _lastExitBar := bar_index
+_inCooldown = cooldownBars > 0 and not na(_lastExitBar) and (bar_index - _lastExitBar) < cooldownBars
+_canEntry   = not _inCooldown and (not confirmClose or barstate.isconfirmed) and _genFilterOk
+
+_canLong  = tradeDirInput != "Short Only"
+_canShort = tradeDirInput != "Long Only"
+
+bool mayEnter    = ready and _canEntry and strategy.position_size == 0 and (not useModel or modelPass)
+bool longSignal  = mayEnter and _canLong  and setupDir == 1
+bool shortSignal = mayEnter and _canShort and setupDir == -1
+
+// ─── Strategy execution ──────────────────────────────────────────────────────
+// Stop wird mit dem Einstieg platziert (aktiv ab der Einstiegskerze), Abstand
+// fest ab Signal-Close — identisch zur Nachbar-Simulation.
+var float stopLevel = na
+
+if longSignal
+    stopLevel := close - stopAtr * atr
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=stopLevel)
+if shortSignal
+    stopLevel := close + stopAtr * atr
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=stopLevel)
+
+if strategy.position_size != 0
+    float avgPx = strategy.position_avg_price
+    bool beLong  = enableBE and strategy.position_size > 0 and close >= avgPx + atr * beATRInput
+    bool beShort = enableBE and strategy.position_size < 0 and close <= avgPx - atr * beATRInput
+    if beLong
+        stopLevel := math.max(stopLevel, avgPx)
+    if beShort
+        stopLevel := math.min(stopLevel, avgPx)
+    if strategy.position_size > 0
+        strategy.exit("Long Exit", "Long", stop=stopLevel)
+    else
+        strategy.exit("Short Exit", "Short", stop=stopLevel)
+
+    // Zeitausstieg auf dem Close der horizon-ten Haltekerze (= Close(s+horizon)).
+    int barsHeld = bar_index - strategy.opentrades.entry_bar_index(0) + 1
+    if barsHeld >= horizon
+        strategy.close(strategy.position_size > 0 ? "Long" : "Short", comment="Time", immediately=true)
+
+// ─── Visuals ─────────────────────────────────────────────────────────────────
+plot(ema, "Trend EMA", color=trend == 1 ? color.teal : trend == -1 ? color.red : color.gray)
+plot(strategy.position_size != 0 ? stopLevel : na, "Stop", color=color.orange, style=plot.style_linebr)
+plot(expectedR,   "Neighbour Mean Result (R)", display=display.data_window)
+plot(lowerR,      "Neighbour Lower Bound (R)", display=display.data_window)
+plot(costR,       "Cost Hurdle (R)",           display=display.data_window)
+plot(agreement,   "Neighbour Agreement (%)",   display=display.data_window)
+plot(matchCount,  "Neighbour Matches",         display=display.data_window)
+
+// ============================================================================
+// CFD cost model (display only)
+// The tester books no spread, financing or daily premium adjustment: this
+// block deducts them per closed trade and shows the result in its own table.
+// Spread is paid once per trade; financing is charged per calendar night held
+// (a weekend counts as 3 nights, as at the broker). Set the values from the
+// broker's current sheet for the symbol; 0 = cost not applied.
+// ============================================================================
+g_cost = "Cost Model (CFD)"
+cmSpread   = input.float(0.0, "Spread (price points)", minval=0.0, step=0.0001, group=g_cost,
+     tooltip="Full spread paid once per trade, in price points of the symbol. Capital CFDs charge no commission. 0 = not applied.")
+cmFinLong  = input.float(0.0, "Financing Long (% p.a.)", step=0.1, group=g_cost,
+     tooltip="Yearly rate on the position value, charged per calendar night held. Negative = credit. Include the daily premium adjustment for commodities. 0 = not applied.")
+cmFinShort = input.float(0.0, "Financing Short (% p.a.)", step=0.1, group=g_cost,
+     tooltip="As Financing Long, for short positions. Long and short differ at most brokers.")
+cmStress   = input.float(1.5, "Cost Stress Factor", minval=1.0, step=0.1, group=g_cost,
+     tooltip="All costs multiplied by this factor in the second result column. A result that flips under stress does not carry.")
+cmShow     = input.bool(true, "Show Cost Table", group=g_cost)
+
+var int   cmDone     = 0
+var int   cmNights   = 0
+var float cmGross    = 0.0
+var float cmSpreadSum = 0.0
+var float cmFinSum   = 0.0
+var float cmWin      = 0.0
+var float cmLoss     = 0.0
+var float cmWinS     = 0.0
+var float cmLossS    = 0.0
+
+int cmNow = strategy.closedtrades
+if cmNow > cmDone
+    for i = cmDone to cmNow - 1
+        float sz = strategy.closedtrades.size(i)
+        float qty = math.abs(sz)
+        int nights = int(math.max(0, math.floor(strategy.closedtrades.exit_time(i) / 86400000) - math.floor(strategy.closedtrades.entry_time(i) / 86400000)))
+        float rate = (sz > 0 ? cmFinLong : cmFinShort) / 100.0 / 365.0
+        float spr = qty * cmSpread * syminfo.pointvalue
+        float fin = qty * strategy.closedtrades.entry_price(i) * syminfo.pointvalue * rate * nights
+        float pnl = strategy.closedtrades.profit(i)
+        float net = pnl - spr - fin
+        float netS = pnl - cmStress * (spr + fin)
+        cmNights += nights
+        cmGross += pnl
+        cmSpreadSum += spr
+        cmFinSum += fin
+        cmWin += math.max(net, 0)
+        cmLoss += math.max(-net, 0)
+        cmWinS += math.max(netS, 0)
+        cmLossS += math.max(-netS, 0)
+    cmDone := cmNow
+
+var table cmTbl = table.new(position.bottom_left, 3, 9,
+     bgcolor=color.new(color.white, 5), border_color=color.new(color.gray, 60), border_width=1,
+     frame_color=color.new(color.gray, 40), frame_width=1)
+if (barstate.islastconfirmedhistory or barstate.islast) and cmShow
+    color cmTc = color.new(color.gray, 20)
+    color cmHd = color.new(color.gray, 90)
+    bool cmSet = cmSpread != 0.0 or cmFinLong != 0.0 or cmFinShort != 0.0
+    float cmNetB = cmWin - cmLoss
+    float cmNetS = cmWinS - cmLossS
+    string cmPfB = cmLoss > 0 ? str.tostring(cmWin / cmLoss, "#.##") : "–"
+    string cmPfS = cmLossS > 0 ? str.tostring(cmWinS / cmLossS, "#.##") : "–"
+    table.cell(cmTbl, 0, 0, "Cost model", text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 1, 0, "Costs", text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 2, 0, "Stress ×" + str.tostring(cmStress, "#.#"), text_color=cmTc, bgcolor=cmHd, text_size=size.small)
+    table.cell(cmTbl, 0, 1, "Status", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 1, cmSet ? "applied" : "NOT SET – cost-free", text_color=cmSet ? cmTc : #ff6f00, text_size=size.small)
+    table.cell(cmTbl, 2, 1, "", text_size=size.small)
+    table.cell(cmTbl, 0, 2, "Trades / avg nights", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 2, str.tostring(cmDone) + " / " + (cmDone > 0 ? str.tostring(cmNights / cmDone, "#.#") : "–"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 2, "", text_size=size.small)
+    table.cell(cmTbl, 0, 3, "Net before costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 3, str.tostring(cmGross, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 3, str.tostring(cmGross, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 4, "Spread", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 4, str.tostring(-cmSpreadSum, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 4, str.tostring(-cmSpreadSum * cmStress, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 5, "Financing", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 5, str.tostring(-cmFinSum, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 5, str.tostring(-cmFinSum * cmStress, "#.##"), text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 6, "Net after costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 6, str.tostring(cmNetB, "#.##"), text_color=cmNetB >= 0 ? #00c853 : #d50000, text_size=size.small)
+    table.cell(cmTbl, 2, 6, str.tostring(cmNetS, "#.##"), text_color=cmNetS >= 0 ? #00c853 : #d50000, text_size=size.small)
+    table.cell(cmTbl, 0, 7, "Profit factor after costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 7, cmPfB, text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 2, 7, cmPfS, text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 0, 8, "Tester columns exclude these costs", text_color=cmTc, text_size=size.small)
+    table.cell(cmTbl, 1, 8, "", text_size=size.small)
+    table.cell(cmTbl, 2, 8, "", text_size=size.small)
+
+// ============================================================================
+// Random baseline (shadow test, display only — no orders)
+// The strategy's own entries and a random set with the same side and the same
+// frequency are both replayed here with one identical fixed exit (ATR target,
+// ATR stop, time limit), gross in R, long and short apart. A signal that does
+// not beat the random set under the same exit carries no information of its
+// own. The random trigger rate is the running signal rate of this chart
+// (causal); the seed is fixed, so the set repeats. One seed is one draw: with
+// few trades the difference is noise. Set target/stop/time like the strategy's
+// Fixed exit to compare against its own result.
+// ============================================================================
+g_rb = "Random Baseline"
+rbOn     = input.bool(true, "Show Random Baseline", group=g_rb,
+     tooltip="Replays signal entries and random entries with one fixed exit and compares them per side. Display only.")
+rbTp     = input.float(2.0, "Baseline Target (ATR×)", minval=0.1, step=0.1, group=g_rb)
+rbSl     = input.float(1.5, "Baseline Stop (ATR×)",   minval=0.1, step=0.1, group=g_rb)
+rbBars   = input.int(24, "Baseline Time Limit (Bars)", minval=1, group=g_rb)
+rbSeed   = input.int(42, "Random Seed", group=g_rb,
+     tooltip="Fixed seed: the random set is the same on every load. Change it to see how much one draw varies.")
+rbAtrLen = input.int(14, "Baseline ATR Length", minval=1, group=g_rb)
+
+// One simulated side: enters at the open after the trigger, one trade at a time,
+// returns the trade result in R on the bar it closes (na otherwise). Stop wins a same-bar tie.
+rbTrack(bool trig, bool isLong, float atrV, float tpM, float slM, int tb) =>
+    var bool  inT  = false
+    var bool  pend = false
+    var float pAtr = na
+    var float ep   = na
+    var float stp  = na
+    var float tgt  = na
+    var float risk = na
+    var int   held = 0
+    float res = na
+    if pend and not inT
+        ep := open
+        risk := slM * pAtr
+        stp := isLong ? ep - risk : ep + risk
+        tgt := isLong ? ep + tpM * pAtr : ep - tpM * pAtr
+        inT := true
+        held := 0
+        pend := false
+    else if inT
+        held += 1
+    if inT
+        bool hitS = isLong ? low <= stp : high >= stp
+        bool hitT = isLong ? high >= tgt : low <= tgt
+        if hitS
+            res := -1.0
+        else if hitT
+            res := tpM / slM
+        else if held >= tb
+            res := (isLong ? close - ep : ep - close) / risk
+        if not na(res)
+            inT := false
+    if trig and not inT and not pend
+        pend := true
+        pAtr := atrV
+    res
+
+bool rbEligible = ready and (not confirmClose or barstate.isconfirmed) and _genFilterOk
+bool rbSigL = rbEligible and (not useModel or modelPass) and _canLong  and setupDir == 1
+bool rbSigS = rbEligible and (not useModel or modelPass) and _canShort and setupDir == -1
+var int rbCntL = 0
+var int rbCntS = 0
+var int rbEligibleBars = 0
+if rbEligible
+    rbEligibleBars += 1
+if rbSigL
+    rbCntL += 1
+if rbSigS
+    rbCntS += 1
+float rbRateL = rbEligibleBars > 0 ? rbCntL / float(rbEligibleBars) : 0.0
+float rbRateS = rbEligibleBars > 0 ? rbCntS / float(rbEligibleBars) : 0.0
+float rbU1 = math.random(0, 1, rbSeed)
+float rbU2 = math.random(0, 1, rbSeed + 1000)
+float rbAtr = ta.atr(rbAtrLen)
+
+float rbRSL = rbTrack(rbSigL, true,  rbAtr, rbTp, rbSl, rbBars)
+float rbRRL = rbTrack(rbEligible and rbU1 < rbRateL, true,  rbAtr, rbTp, rbSl, rbBars)
+float rbRSS = rbTrack(rbSigS, false, rbAtr, rbTp, rbSl, rbBars)
+float rbRRS = rbTrack(rbEligible and rbU2 < rbRateS, false, rbAtr, rbTp, rbSl, rbBars)
+
+var int   rbNSL = 0
+var int   rbNRL = 0
+var int   rbNSS = 0
+var int   rbNRS = 0
+var float rbSumSL = 0.0
+var float rbSumRL = 0.0
+var float rbSumSS = 0.0
+var float rbSumRS = 0.0
+var int   rbWinSL = 0
+var int   rbWinRL = 0
+var int   rbWinSS = 0
+var int   rbWinRS = 0
+if not na(rbRSL)
+    rbNSL += 1
+    rbSumSL += rbRSL
+    rbWinSL += rbRSL > 0 ? 1 : 0
+if not na(rbRRL)
+    rbNRL += 1
+    rbSumRL += rbRRL
+    rbWinRL += rbRRL > 0 ? 1 : 0
+if not na(rbRSS)
+    rbNSS += 1
+    rbSumSS += rbRSS
+    rbWinSS += rbRSS > 0 ? 1 : 0
+if not na(rbRRS)
+    rbNRS += 1
+    rbSumRS += rbRRS
+    rbWinRS += rbRRS > 0 ? 1 : 0
+
+var table rbTbl = table.new(position.top_left, 4, 8,
+     bgcolor=color.new(color.white, 5), border_color=color.new(color.gray, 60), border_width=1,
+     frame_color=color.new(color.gray, 40), frame_width=1)
+if (barstate.islastconfirmedhistory or barstate.islast) and rbOn
+    color rbTc = color.new(color.gray, 20)
+    color rbHd = color.new(color.gray, 90)
+    float rbAvgSL = rbNSL > 0 ? rbSumSL / rbNSL : na
+    float rbAvgRL = rbNRL > 0 ? rbSumRL / rbNRL : na
+    float rbAvgSS = rbNSS > 0 ? rbSumSS / rbNSS : na
+    float rbAvgRS = rbNRS > 0 ? rbSumRS / rbNRS : na
+    float rbDL = rbAvgSL - rbAvgRL
+    float rbDS = rbAvgSS - rbAvgRS
+    table.cell(rbTbl, 0, 0, "Fixed-exit baseline (gross R)", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 1, 0, "n", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 2, 0, "Win %", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 3, 0, "avg R", text_color=rbTc, bgcolor=rbHd, text_size=size.small)
+    table.cell(rbTbl, 0, 1, "Long – signal", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 1, str.tostring(rbNSL), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 1, rbNSL > 0 ? str.tostring(100.0 * rbWinSL / rbNSL, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 1, na(rbAvgSL) ? "–" : str.tostring(rbAvgSL, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 2, "Long – random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 2, str.tostring(rbNRL), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 2, rbNRL > 0 ? str.tostring(100.0 * rbWinRL / rbNRL, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 2, na(rbAvgRL) ? "–" : str.tostring(rbAvgRL, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 3, "Long – signal minus random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 3, "", text_size=size.small)
+    table.cell(rbTbl, 2, 3, "", text_size=size.small)
+    table.cell(rbTbl, 3, 3, na(rbDL) ? "–" : str.tostring(rbDL, "#.##"), text_color=na(rbDL) ? rbTc : (rbDL >= 0 ? #00c853 : #d50000), text_size=size.small)
+    table.cell(rbTbl, 0, 4, "Short – signal", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 4, str.tostring(rbNSS), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 4, rbNSS > 0 ? str.tostring(100.0 * rbWinSS / rbNSS, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 4, na(rbAvgSS) ? "–" : str.tostring(rbAvgSS, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 5, "Short – random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 5, str.tostring(rbNRS), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 2, 5, rbNRS > 0 ? str.tostring(100.0 * rbWinRS / rbNRS, "#.#") : "–", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 3, 5, na(rbAvgRS) ? "–" : str.tostring(rbAvgRS, "#.##"), text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 0, 6, "Short – signal minus random", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 6, "", text_size=size.small)
+    table.cell(rbTbl, 2, 6, "", text_size=size.small)
+    table.cell(rbTbl, 3, 6, na(rbDS) ? "–" : str.tostring(rbDS, "#.##"), text_color=na(rbDS) ? rbTc : (rbDS >= 0 ? #00c853 : #d50000), text_size=size.small)
+    table.cell(rbTbl, 0, 7, "Gross, no costs · one seed · n < 30 is a hint", text_color=rbTc, text_size=size.small)
+    table.cell(rbTbl, 1, 7, "", text_size=size.small)
+    table.cell(rbTbl, 2, 7, "", text_size=size.small)
+    table.cell(rbTbl, 3, 7, "", text_size=size.small)

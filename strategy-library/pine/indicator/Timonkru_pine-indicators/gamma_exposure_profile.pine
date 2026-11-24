@@ -1,0 +1,629 @@
+//@version=6
+// GAMMA EXPOSURE PROFILE — MANUAL CHAIN INPUT
+// A self-contained dealer-gamma calculator: paste option-chain rows (strike,
+// call OI, put OI, optional IV) into the settings and the script computes
+// Black-Scholes gamma per strike, aggregates signed dealer GEX (calls +,
+// puts -), finds the gamma flip, call/put walls and the expected move, and
+// draws the exposure profile next to price.
+// v1.1 adds the two second-order flows on the same chain: VANNA (how dealer
+// delta reacts to a change in implied volatility, reported per one vol point)
+// and CHARM (how dealer delta decays with time, per trading day). They
+// describe hedging pressure that builds without price moving at all.
+// v1.2 adds an optional per-strike expiry (5th field): gamma grows ~1/sqrt(T),
+// so rows spanning several expiries priced on one averaged dte can shift the
+// flip by hundreds of points. Old pastes keep working (header-dte fallback).
+// v1.3 makes ONE paste serve EVERY chart: six input fields, each block may
+// carry market= (auto-matched against the chart symbol, override available)
+// and map=near for the near-dated card. TradingView silently truncates each
+// text field at ~10,900 characters - measured, not documented - so large
+// chains are split across fields; the script reads them as one.
+// No external data is fetched (Pine cannot); the chain snapshot is USER INPUT,
+// so the script itself never goes stale — refresh the paste, not the code.
+// Sign convention (an assumption, not a law): dealers long call gamma, short
+// put gamma. All values are model estimates (r = 0, one representative expiry
+// per map), meant as context levels — not trade signals. Vanna and charm carry
+// an extra caveat: unlike the gamma regime they are not backtested here.
+indicator("Gamma Exposure Profile — Manual Chain Input", shorttitle = "GEX Profile", overlay = true,
+     max_boxes_count = 250, max_lines_count = 30, max_labels_count = 20)
+
+// ---------------------------------------------------------------- inputs ---
+grpFmt = "Chain input"
+fmtTip = "Block header: #market=DAX;spot=24915.5;dte=21.4;mult=5;iv=0.18;aiv=0.16;date=2026-07-17\n" +
+     "market= (optional) names the block; the script auto-picks the block matching the chart symbol " +
+     "(DAX/NQ/DOW/GOLD/FTSE/SPX, or set the override below). map=near marks a near-dated card. " +
+     "One field may hold several blocks; all six fields are read as one paste.\n" +
+     "NOTE: TradingView silently cuts each field at ~10,900 characters - split large chains across fields.\n" +
+     "Then one line per strike: strike;callOI;putOI[;iv[;dte]]\n" +
+     "dte per strike (5th field) overrides the header value - include it whenever the rows span several " +
+     "expiries: gamma grows ~1/sqrt(T), one averaged dte can shift the flip by hundreds of points.\n" +
+     "spot = underlying index/spot price, dte = days to expiry (representative), " +
+     "mult = contract multiplier, iv = fallback implied vol (decimal) for rows without one, " +
+     "date = snapshot date (optional, enables the staleness warning)."
+// v1.5: EIN EIGENES FELDPAAR JE MARKT (Timons Entwurf). Vorher lagen alle
+// Maerkte in generischen Feldern und wurden ueber market=-Schluessel im Header
+// gefiltert - vier Anlaeufe, den Filter zuverlaessig zu bekommen, sind
+// gescheitert. Jetzt bestimmt das FELD den Markt: Symbol erkannt -> zugehoeriges
+// Feld gelesen. Nichts zu filtern, nichts zu verwechseln.
+genS = input.text_area("", "Any market — structure", tooltip = fmtTip, group = grpFmt)
+genS2 = input.text_area("", "Any market — structure (part 2)", group = grpFmt)
+genN2 = input.text_area("", "Any market — near (part 2)", group = grpFmt)
+genN = input.text_area("", "Any market — near (0-5 DTE)", group = grpFmt,
+     tooltip = "Used when the market-specific fields below are empty. Enough for a single-market setup.")
+
+grpDAX = "DAX chain"
+daxS = input.text_area("", "DAX — structure", group = grpDAX)
+daxS2 = input.text_area("", "DAX — structure (part 2)", group = grpDAX,
+     tooltip = "Only needed when one field cannot hold the whole card (TradingView truncates a field at about 10,900 characters). The seed writer splits automatically and names the parts.")
+daxN = input.text_area("", "DAX — near", group = grpDAX)
+daxN2 = input.text_area("", "DAX — near (part 2)", group = grpDAX)
+grpNQ = "NQ / Nasdaq chain"
+nqS = input.text_area("", "NQ — structure", group = grpNQ)
+nqS2 = input.text_area("", "NQ — structure (part 2)", group = grpNQ,
+     tooltip = "Only needed when one field cannot hold the whole card (TradingView truncates a field at about 10,900 characters). The seed writer splits automatically and names the parts.")
+nqN = input.text_area("", "NQ — near", group = grpNQ)
+nqN2 = input.text_area("", "NQ — near (part 2)", group = grpNQ)
+grpDOW = "DOW chain"
+dowS = input.text_area("", "DOW — structure", group = grpDOW)
+dowS2 = input.text_area("", "DOW — structure (part 2)", group = grpDOW,
+     tooltip = "Only needed when one field cannot hold the whole card (TradingView truncates a field at about 10,900 characters). The seed writer splits automatically and names the parts.")
+dowN = input.text_area("", "DOW — near", group = grpDOW)
+dowN2 = input.text_area("", "DOW — near (part 2)", group = grpDOW)
+grpGLD = "GOLD chain"
+gldS = input.text_area("", "GOLD — structure", group = grpGLD)
+gldS2 = input.text_area("", "GOLD — structure (part 2)", group = grpGLD,
+     tooltip = "Only needed when one field cannot hold the whole card (TradingView truncates a field at about 10,900 characters). The seed writer splits automatically and names the parts.")
+gldN = input.text_area("", "GOLD — near", group = grpGLD)
+gldN2 = input.text_area("", "GOLD — near (part 2)", group = grpGLD)
+grpFT = "FTSE chain"
+ftS = input.text_area("", "FTSE — structure", group = grpFT)
+ftS2 = input.text_area("", "FTSE — structure (part 2)", group = grpFT,
+     tooltip = "Only needed when one field cannot hold the whole card (TradingView truncates a field at about 10,900 characters). The seed writer splits automatically and names the parts.")
+ftN = input.text_area("", "FTSE — near", group = grpFT)
+ftN2 = input.text_area("", "FTSE — near (part 2)", group = grpFT)
+grpSPX = "SPX chain"
+spxS = input.text_area("", "SPX — structure", group = grpSPX)
+spxS2 = input.text_area("", "SPX — structure (part 2)", group = grpSPX,
+     tooltip = "Only needed when one field cannot hold the whole card (TradingView truncates a field at about 10,900 characters). The seed writer splits automatically and names the parts.")
+spxN = input.text_area("", "SPX — near", group = grpSPX)
+spxN2 = input.text_area("", "SPX — near (part 2)", group = grpSPX)
+
+grpM = "Market"
+showDbg = input.bool(false, "Diagnostics: show which field was read", group = grpM,
+     tooltip = "Prints the source field and the number of rows parsed - useful to confirm " +
+     "the chart is reading the chain you think it is.")
+mktSel = input.string("Auto", "Market", options = ["Auto", "DAX", "NQ", "DOW", "GOLD", "FTSE", "SPX"], group = grpM,
+     tooltip = "Which market= blocks to use. Auto detects from the chart symbol. Blocks WITHOUT a market= key always apply (single-market use).")
+mktKey = input.string("", "Market key override (free text)", group = grpM,
+     tooltip = "For symbols the auto-detection does not know: type the exact market= value used in your paste.")
+
+grpD = "Display"
+showHist   = input.bool(true, "Show GEX histogram", group = grpD)
+profW      = input.int(24, "Histogram width (bars)", minval = 5, group = grpD)
+gap        = input.int(3,  "Gap from price (bars)", minval = 0, group = grpD)
+posCol     = input.color(color.new(color.teal, 35), "Positive GEX", group = grpD)
+negCol     = input.color(color.new(color.red, 35),  "Negative GEX", group = grpD)
+showFlip   = input.bool(true,  "Flip (yellow, thick)", group = grpD)
+showWalls  = input.bool(true,  "Call/put walls (red/green, thick)", group = grpD)
+showWalls2 = input.bool(true,  "2nd walls (dashed)", group = grpD)
+showEM     = input.bool(true,  "Expected move ±1 day (blue, dotted)", group = grpD)
+showNear   = input.bool(true,  "Near-map walls (orange/teal, dotted)", group = grpD)
+showReg    = input.bool(true,  "Regime background", group = grpD)
+neutralPct = input.float(0.3, "Flip zone (± %)", minval = 0.05, step = 0.05, group = grpD)
+offset     = input.float(0.0, "Chart offset (points)", group = grpD,
+     tooltip = "Constant basis offset between your chart (e.g. a CFD) and the option underlying. Added to every level.")
+
+grpF = "Second-order flows (context — model estimate, not a signal)"
+showFlow  = input.bool(true, "Vanna / charm in the label", group = grpF,
+     tooltip = "Vanna = how dealer delta reacts to a change in implied volatility (reported per one vol point). " +
+     "Charm = how dealer delta decays as time passes (per trading day). Both use the same dealer sign convention " +
+     "as the GEX above (long calls, short puts) and assume r = 0. They describe hedging pressure that builds " +
+     "WITHOUT price moving — unlike the gamma regime, they are not backtested here. Read them as context.")
+showVanna = input.bool(false, "Dominant vanna strike (purple, dotted)", group = grpF)
+showCharm = input.bool(false, "Dominant charm strike (aqua, dotted)", group = grpF)
+
+// ------------------------------------------------------- Black-Scholes ----
+f_npdf(x) => math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+// BS gamma, r = 0. Same value for call and put at equal strike/IV, so the
+// signed per-strike sum reduces to gamma * (callOI - putOI).
+// Vanna = dDelta/dVol, per 1.0 vol (decimal).  r = 0 assumed throughout.
+//   vanna = -phi(d1) * d2 / sigma
+f_vanna(S, K, T, sig) =>
+    float v = 0.0
+    if T > 0 and sig > 0 and S > 0 and K > 0
+        srt = sig * math.sqrt(T)
+        d1  = (math.log(S / K) + 0.5 * sig * sig * T) / srt
+        d2  = d1 - srt
+        v := -f_npdf(d1) * d2 / sig
+    v
+
+// Charm = dDelta/dt as time passes, per YEAR.  With r = 0 this reduces to
+//   charm = phi(d1) * d2 / (2T)
+f_charm(S, K, T, sig) =>
+    float c = 0.0
+    if T > 0 and sig > 0 and S > 0 and K > 0
+        srt = sig * math.sqrt(T)
+        d1  = (math.log(S / K) + 0.5 * sig * sig * T) / srt
+        d2  = d1 - srt
+        c := f_npdf(d1) * d2 / (2.0 * T)
+    c
+
+f_gamma(S, K, T, sig) =>
+    float g = 0.0
+    if T > 0 and sig > 0 and S > 0 and K > 0
+        srt = sig * math.sqrt(T)
+        d1  = (math.log(S / K) + 0.5 * sig * sig * T) / srt
+        g := f_npdf(d1) / (S * srt)
+    g
+
+// ------------------------------------------------------- market detect ----
+f_detect() =>
+    t = str.upper(syminfo.ticker)
+    r = ""
+    if str.contains(t, "GER") or str.contains(t, "DAX") or str.contains(t, "DE40") or str.contains(t, "DE30")
+        r := "DAX"
+    else if str.contains(t, "NAS") or str.contains(t, "US100") or str.contains(t, "USTEC") or str.contains(t, "NDX")
+        r := "NQ"
+    else if str.contains(t, "US30") or str.contains(t, "WS30") or str.contains(t, "DOW") or str.contains(t, "DJ")
+        r := "DOW"
+    else if str.contains(t, "XAU") or str.contains(t, "GOLD") or str.contains(t, "GC")
+        r := "GOLD"
+    else if str.contains(t, "UK100") or str.contains(t, "FTSE")
+        r := "FTSE"
+    else if str.contains(t, "SPX") or str.contains(t, "US500") or str.contains(t, "SP500") or str.contains(t, "ES")
+        r := "SPX"
+    r
+
+// ------------------------------------------------------------- parser -----
+// Returns [ok, spot, dte, mult, fallbackIv, atmIv, y, m, d]; atmIv comes from
+// the optional header key aiv= (ATM IV of the FULL chain incl. zero-OI rows
+// - the paste only carries OI>0, so the expected move would drift without it).
+// dts: per-strike days-to-expiry (optional 5th field; -1 = use the header dte).
+// v1.1: gamma grows ~1/sqrt(T) — when the rows span several expiries, one
+// averaged dte skews the flip (measured: 368 points on a Dow chain).
+// v1.3: wantMap = "structure"|"near" - which card this call collects.
+// wantMkt = the market key to match; "" accepts only key-less blocks.
+// defMap  = card assigned to key-less blocks in this field (legacy layout).
+// Parst einen bereits ausgewaehlten Textabschnitt EINES Marktes. Kein Filter,
+// kein Zustand — das ist der Parser, der seit v1.0 nachweislich korrekt ist.
+// dts: Restlaufzeit je Strike (optionales 5. Feld; -1 = Header-dte nutzen).
+// aiv (Header): ATM-IV der VOLLEN Kette inkl. OI=0-Zeilen — der Paste traegt
+// nur OI>0, ohne aiv driftet der Expected Move.
+f_parse(txt, ks, cs, ps, ivs, dts) =>
+    ok = false
+    float spot = na
+    float dte  = na
+    float mult = 1.0
+    float fiv  = 0.2
+    float aiv  = na
+    int   yy = 0
+    int   mm = 0
+    int   dd = 0
+    if str.length(txt) > 0
+        lines_ = str.split(txt, "\n")
+        for li = 0 to array.size(lines_) - 1
+            ln = array.get(lines_, li)
+            if str.length(ln) > 0
+                if str.contains(ln, "=")
+                    body = str.startswith(ln, "#") ? str.substring(ln, 1) : ln
+                    toks = str.split(body, ";")
+                    for ti = 0 to array.size(toks) - 1
+                        kv = str.split(array.get(toks, ti), "=")
+                        if array.size(kv) == 2
+                            k = str.lower(array.get(kv, 0))
+                            v = array.get(kv, 1)
+                            if k == "spot"
+                                spot := str.tonumber(v)
+                            else if k == "dte"
+                                dte := str.tonumber(v)
+                            else if k == "mult"
+                                mult := nz(str.tonumber(v), 1.0)
+                            else if k == "iv"
+                                fiv := nz(str.tonumber(v), 0.2)
+                            else if k == "aiv"
+                                aiv := str.tonumber(v)
+                            else if k == "date"
+                                dp = str.split(v, "-")
+                                if array.size(dp) == 3
+                                    yy := int(nz(str.tonumber(array.get(dp, 0))))
+                                    mm := int(nz(str.tonumber(array.get(dp, 1))))
+                                    dd := int(nz(str.tonumber(array.get(dp, 2))))
+                else
+                    fl = str.split(ln, ";")
+                    if array.size(fl) >= 3
+                        k  = str.tonumber(array.get(fl, 0))
+                        c  = str.tonumber(array.get(fl, 1))
+                        p  = str.tonumber(array.get(fl, 2))
+                        iv = array.size(fl) >= 4 ? str.tonumber(array.get(fl, 3)) : na
+                        dt = array.size(fl) >= 5 ? str.tonumber(array.get(fl, 4)) : na
+                        if not na(k) and (nz(c) > 0 or nz(p) > 0)
+                            array.push(ks, k)
+                            array.push(cs, nz(c))
+                            array.push(ps, nz(p))
+                            array.push(ivs, na(iv) ? -1.0 : iv)
+                            array.push(dts, na(dt) or dt <= 0 ? -1.0 : dt)
+        ok := array.size(ks) > 0 and not na(spot) and not na(dte) and dte > 0
+    [ok, spot, dte, mult, fiv, aiv, yy, mm, dd]
+
+// Total signed GEX (USD per 1% move) at a hypothetical spot S.
+f_totalGex(S, ks, cs, ps, ivs, dts, fiv, Thdr, mult) =>
+    total = 0.0
+    for i = 0 to array.size(ks) - 1
+        iv = array.get(ivs, i)
+        sig = iv > 0 ? iv : fiv
+        dt = array.get(dts, i)
+        T = dt > 0 ? dt / 365.0 : Thdr
+        g = f_gamma(S, array.get(ks, i), T, sig)
+        total += g * (array.get(cs, i) - array.get(ps, i)) * mult * S * S * 0.01
+    total
+
+// Levels of one map: [flip, cw, pw, cw2, pw2, emAbs, totalAtSpot].
+// aggK/gexOut are filled with the PER-STRIKE aggregated profile.
+// Flip = zero crossing of total GEX over a spot grid (nearest to spot).
+// Walls = strikes with the largest positive / most negative per-strike GEX.
+f_levels(ks, cs, ps, ivs, dts, fiv, aivH, dte, mult, spot, aggK, gexOut) =>
+    T = dte / 365.0   // header dte -> fallback for rows without field 5
+    n = array.size(ks)
+    // per-strike signed GEX at the current spot (also feeds the histogram)
+    array.clear(gexOut)
+    array.clear(aggK)
+    float cw = na, float pw = na, float cw2 = na, float pw2 = na
+    maxPos = 0.0, maxPos2 = 0.0
+    minNeg = 0.0, minNeg2 = 0.0
+    float ivAtm = fiv
+    // v1.2.1: since v1.2 each pasted row is ONE OPTION (own iv, own dte).
+    // Walls and the histogram must aggregate per STRIKE - otherwise a "wall"
+    // is just the single biggest expiry line and CW/CW2 can be the same
+    // strike twice. Rows arrive strike-sorted, so consecutive equals sum up.
+    float curK = na
+    accV = 0.0
+    for i = 0 to n
+        float k = i < n ? array.get(ks, i) : na
+        float v = 0.0
+        if i < n
+            iv = array.get(ivs, i)
+            sig = iv > 0 ? iv : fiv
+            dtI = array.get(dts, i)
+            Ti = dtI > 0 ? dtI / 365.0 : T
+            v := f_gamma(spot, k, Ti, sig) * (array.get(cs, i) - array.get(ps, i)) * mult * spot * spot * 0.01
+        if not na(curK) and (na(k) or k != curK)
+            array.push(aggK, curK)
+            array.push(gexOut, accV)
+            if accV > maxPos
+                maxPos2 := maxPos
+                cw2 := cw
+                maxPos := accV
+                cw := curK
+            else if accV > maxPos2
+                maxPos2 := accV
+                cw2 := curK
+            if accV < minNeg
+                minNeg2 := minNeg
+                pw2 := pw
+                minNeg := accV
+                pw := curK
+            else if accV < minNeg2
+                minNeg2 := accV
+                pw2 := curK
+            accV := 0.0
+        if not na(k)
+            curK := k
+            accV += v
+    // flip: two-stage search. Stage 1 scans the whole strike span on a coarse
+    // grid (finds every crossing); stage 2 rescans one coarse step around the
+    // crossing nearest to spot on a fine grid. v1.2.1: the single coarse pass
+    // quantized the flip to ~1/120 of the strike span (~100 points on a DAX
+    // chain) — the refine pass brings it to a few points.
+    kLo = array.min(ks)
+    kHi = array.max(ks)
+    float flip = na
+    flipDist = 1e18
+    steps = 120
+    prevS = kLo
+    prevV = f_totalGex(kLo, ks, cs, ps, ivs, dts, fiv, T, mult)
+    for j = 1 to steps
+        s = kLo + (kHi - kLo) * j / steps
+        v = f_totalGex(s, ks, cs, ps, ivs, dts, fiv, T, mult)
+        if (prevV < 0 and v >= 0) or (prevV >= 0 and v < 0)
+            x = prevS + (s - prevS) * (0 - prevV) / (v - prevV)
+            if math.abs(x - spot) < flipDist
+                flipDist := math.abs(x - spot)
+                flip := x
+        prevS := s
+        prevV := v
+    if not na(flip)
+        // stage 2: fine rescan +/- one coarse step around the found crossing
+        step1 = (kHi - kLo) / steps
+        fLo = math.max(kLo, flip - step1)
+        fHi = math.min(kHi, flip + step1)
+        float flip2 = na
+        flip2Dist = 1e18
+        prevS := fLo
+        prevV := f_totalGex(fLo, ks, cs, ps, ivs, dts, fiv, T, mult)
+        for j = 1 to 60
+            s = fLo + (fHi - fLo) * j / 60
+            v = f_totalGex(s, ks, cs, ps, ivs, dts, fiv, T, mult)
+            if (prevV < 0 and v >= 0) or (prevV >= 0 and v < 0)
+                x = prevS + (s - prevS) * (0 - prevV) / (v - prevV)
+                if math.abs(x - spot) < flip2Dist
+                    flip2Dist := math.abs(x - spot)
+                    flip2 := x
+            prevS := s
+            prevV := v
+        if not na(flip2)
+            flip := flip2
+    // v1.2.1: ATM IV = median of the 6 rows closest to spot, EM over
+    // sqrt(252) trading days - both exactly as in the reference computation.
+    float[] selDist = array.new_float()
+    float[] selIv   = array.new_float()
+    for i = 0 to n - 1
+        array.push(selDist, math.abs(array.get(ks, i) - spot))
+        ivR = array.get(ivs, i)
+        array.push(selIv, ivR > 0 ? ivR : fiv)
+    float[] atm6 = array.new_float()
+    reps = math.min(6, array.size(selDist))
+    if reps > 0
+        for j = 1 to reps
+            bi = 0
+            bv = array.get(selDist, 0)
+            for i = 1 to array.size(selDist) - 1
+                if array.get(selDist, i) < bv
+                    bv := array.get(selDist, i)
+                    bi := i
+            array.push(atm6, array.get(selIv, bi))
+            array.set(selDist, bi, 1e18)
+        array.sort(atm6)
+        m = array.size(atm6)
+        ivAtm := m % 2 == 1 ? array.get(atm6, m / 2) :
+             (array.get(atm6, m / 2 - 1) + array.get(atm6, m / 2)) / 2.0
+    if not na(aivH)
+        ivAtm := aivH   // full-chain ATM IV from the header wins when provided
+    em = spot * ivAtm / math.sqrt(252.0)
+    [flip, cw, pw, cw2, pw2, em, f_totalGex(spot, ks, cs, ps, ivs, dts, fiv, T, mult)]
+
+// Second-order dealer flows at the current spot — same sign convention as GEX
+// (dealers long calls, short puts, so the per-strike weight is callOI-putOI):
+//   vanna exposure = $ delta shift per ONE volatility POINT (0.01)
+//   charm exposure = $ delta shift per TRADING DAY (year / 252)
+// Returns [totalVanna, dominantVannaStrike, totalCharm, dominantCharmStrike];
+// "dominant" = the strike carrying the largest absolute exposure.
+f_flows(ks, cs, ps, ivs, dts, fiv, dte, mult, spot) =>
+    T = dte / 365.0   // header dte -> fallback
+    float tv = 0.0, float tc = 0.0
+    float vk = na, float ck = na
+    maxV = 0.0
+    maxC = 0.0
+    // per-strike aggregation (rows are single options, strike-sorted)
+    float curK = na
+    accV = 0.0
+    accC = 0.0
+    n2 = array.size(ks)
+    for i = 0 to n2
+        float k = i < n2 ? array.get(ks, i) : na
+        float v = 0.0
+        float c = 0.0
+        if i < n2
+            iv  = array.get(ivs, i)
+            sig = iv > 0 ? iv : fiv
+            dtI = array.get(dts, i)
+            Ti  = dtI > 0 ? dtI / 365.0 : T
+            net = array.get(cs, i) - array.get(ps, i)
+            v := f_vanna(spot, k, Ti, sig) * net * mult * spot * 0.01
+            c := f_charm(spot, k, Ti, sig) * net * mult * spot / 252.0
+            tv += v
+            tc += c
+        if not na(curK) and (na(k) or k != curK)
+            if math.abs(accV) > maxV
+                maxV := math.abs(accV)
+                vk := curK
+            if math.abs(accC) > maxC
+                maxC := math.abs(accC)
+                ck := curK
+            accV := 0.0
+            accC := 0.0
+        if not na(k)
+            curK := k
+            accV += v
+            accC += c
+    [tv, vk, tc, ck]
+
+// ------------------------------------------------------------ compute -----
+var float[] sK  = array.new_float()
+var float[] sC  = array.new_float()
+var float[] sP  = array.new_float()
+var float[] sIv = array.new_float()
+var float[] sDt = array.new_float()
+var float[] sKA = array.new_float()   // per-strike aggregated strikes
+var float[] sGx = array.new_float()   // per-strike aggregated GEX
+var float[] nK  = array.new_float()
+var float[] nC  = array.new_float()
+var float[] nP  = array.new_float()
+var float[] nIv = array.new_float()
+var float[] nDt = array.new_float()
+var float[] nKA = array.new_float()
+var float[] nGx = array.new_float()
+
+var box[]   boxes = array.new_box()
+var line[]  lns   = array.new_line()
+var label[] labs  = array.new_label()
+f_clear() =>
+    for b in boxes
+        box.delete(b)
+    array.clear(boxes)
+    for l in lns
+        line.delete(l)
+    array.clear(lns)
+    for lb in labs
+        label.delete(lb)
+    array.clear(labs)
+
+f_hline(y, col, w, st) =>
+    array.push(lns, line.new(bar_index - 300, y, bar_index, y, color = col, width = w, style = st, extend = extend.right))
+
+// flip stays global for the alerts (evaluated on every bar)
+var float g_flip = na
+var float g_cw   = na
+var float g_pw   = na
+
+if barstate.islast
+    array.clear(sK)
+    array.clear(sC)
+    array.clear(sP)
+    array.clear(sIv)
+    array.clear(sDt)
+    array.clear(nK)
+    array.clear(nC)
+    array.clear(nP)
+    array.clear(nIv)
+    array.clear(nDt)
+    f_clear()
+    // v1.3: resolve the wanted market, then collect BOTH cards across all six
+    // fields. Key-less blocks always apply (single-market legacy use).
+    wantMkt = mktKey != "" ? str.upper(mktKey) : mktSel != "Auto" ? mktSel : f_detect()
+    // Markt -> Feldpaar. Ist das Marktfeld leer, greift das generische Paar.
+    mSx = wantMkt == "DAX" ? daxS : wantMkt == "NQ" ? nqS : wantMkt == "DOW" ? dowS :
+         wantMkt == "GOLD" ? gldS : wantMkt == "FTSE" ? ftS : wantMkt == "SPX" ? spxS : ""
+    // v1.6: zweiter Teil derselben Karte wird angehaengt. Gefahrlos, weil beide
+    // Felder demselben Markt gehoeren - es wird nichts ausgewaehlt, nur ergaenzt.
+    mSx2 = wantMkt == "DAX" ? daxS2 : wantMkt == "NQ" ? nqS2 : wantMkt == "DOW" ? dowS2 :
+         wantMkt == "GOLD" ? gldS2 : wantMkt == "FTSE" ? ftS2 : wantMkt == "SPX" ? spxS2 : ""
+    mNx = wantMkt == "DAX" ? daxN : wantMkt == "NQ" ? nqN : wantMkt == "DOW" ? dowN :
+         wantMkt == "GOLD" ? gldN : wantMkt == "FTSE" ? ftN : wantMkt == "SPX" ? spxN : ""
+    mNx2 = wantMkt == "DAX" ? daxN2 : wantMkt == "NQ" ? nqN2 : wantMkt == "DOW" ? dowN2 :
+         wantMkt == "GOLD" ? gldN2 : wantMkt == "FTSE" ? ftN2 : wantMkt == "SPX" ? spxN2 : ""
+    structBase = str.length(mSx) > 0 ? mSx : genS
+    structExtra = str.length(mSx) > 0 ? mSx2 : genS2
+    structTxt = str.length(structExtra) > 0 ? structBase + "\n" + structExtra : structBase
+    nearBase  = str.length(mNx) > 0 ? mNx : genN
+    nearExtra = str.length(mNx) > 0 ? mNx2 : genN2
+    nearTxt   = str.length(nearExtra) > 0 ? nearBase + "
+" + nearExtra : nearBase
+    srcTxt    = str.length(mSx) > 0 ? wantMkt + " field" : "generic field"
+    okS = false
+    float spotS = na, float dteS = na, float multS = 1.0
+    float fivS = 0.2, float aivS = na
+    yS = 0
+    mS = 0
+    dS = 0
+    // v1.5: das Feld IST der Markt - nichts zu filtern, nichts zu verwechseln.
+    [o, sp, dt_, mu, fv, av, y_, m_, d_] = f_parse(structTxt, sK, sC, sP, sIv, sDt)
+    dbgS = srcTxt + ", " + str.tostring(array.size(sK)) + " rows"
+    if o
+        okS := true
+        spotS := sp
+        dteS := dt_
+        multS := mu
+        fivS := fv
+        aivS := av
+        yS := y_
+        mS := m_
+        dS := d_
+    if not okS
+        array.push(labs, label.new(bar_index, high,
+             "GEX Profile: no structure chain for this chart" + (wantMkt != "" ? " (market " + wantMkt + ")" : "") +
+             ".\nPaste blocks into the settings - see the tooltip for the format -\nor set the Market override if your symbol is not auto-detected.",
+             style = label.style_label_left, color = color.new(color.orange, 10), textcolor = color.black, size = size.normal))
+    else
+        [flip, cw, pw, cw2, pw2, em, totGex] = f_levels(sK, sC, sP, sIv, sDt, fivS, aivS, dteS, multS, spotS, sKA, sGx)
+        g_flip := na(flip) ? na : flip + offset
+        g_cw   := na(cw) ? na : cw + offset
+        g_pw   := na(pw) ? na : pw + offset
+        // ---- lines ----
+        if showFlip and not na(flip)
+            f_hline(flip + offset, color.yellow, 2, line.style_solid)
+        if showWalls and not na(cw)
+            f_hline(cw + offset, color.red, 2, line.style_solid)
+        if showWalls and not na(pw)
+            f_hline(pw + offset, color.green, 2, line.style_solid)
+        if showWalls2 and not na(cw2)
+            f_hline(cw2 + offset, color.new(color.red, 45), 1, line.style_dashed)
+        if showWalls2 and not na(pw2)
+            f_hline(pw2 + offset, color.new(color.green, 45), 1, line.style_dashed)
+        if showEM and em > 0
+            f_hline(spotS + em + offset, color.new(color.blue, 55), 1, line.style_dotted)
+            f_hline(spotS - em + offset, color.new(color.blue, 55), 1, line.style_dotted)
+        // ---- second-order flows (vanna / charm) ----
+        [totVan, vanK, totChm, chmK] = f_flows(sK, sC, sP, sIv, sDt, fivS, dteS, multS, spotS)
+        if showVanna and not na(vanK)
+            f_hline(vanK + offset, color.new(color.purple, 40), 1, line.style_dotted)
+        if showCharm and not na(chmK)
+            f_hline(chmK + offset, color.new(color.aqua, 45), 1, line.style_dotted)
+        // ---- histogram (per-strike signed GEX) ----
+        if showHist
+            maxAbs = 0.0
+            for v in sGx
+                maxAbs := math.max(maxAbs, math.abs(v))
+            if maxAbs > 0
+                x0 = bar_index + gap
+                nS = array.size(sKA)
+                // half the median strike step as bar half-height
+                step = nS > 1 ? (array.max(sKA) - array.min(sKA)) / (nS - 1) * 0.4 : spotS * 0.001
+                for i = 0 to nS - 1
+                    v = array.get(sGx, i)
+                    w = int(math.round(profW * math.abs(v) / maxAbs))
+                    if w > 0
+                        k = array.get(sKA, i) + offset
+                        array.push(boxes, box.new(x0, k + step, x0 + w, k - step,
+                             border_color = na, bgcolor = v >= 0 ? posCol : negCol))
+        // ---- near map ----
+        okN = false
+        float spotN = na, float dteN = na, float multN = 1.0
+        float fivN = 0.2, float aivN = na
+        [oN, spN, dtN_, muN, fvN, avN, yN_, mN_, dN_] = f_parse(nearTxt, nK, nC, nP, nIv, nDt)
+        if oN
+            okN := true
+            spotN := spN
+            dteN := dtN_
+            multN := muN
+            fivN := fvN
+            aivN := avN
+        float ncw = na
+        float npw = na
+        if okN and showNear
+            [nflip, ncw_, npw_, ncw2, npw2, emN, totN] = f_levels(nK, nC, nP, nIv, nDt, fivN, aivN, dteN, multN, spotN, nKA, nGx)
+            ncw := ncw_
+            npw := npw_
+            if not na(ncw)
+                f_hline(ncw + offset, color.orange, 1, line.style_dotted)
+            if not na(npw)
+                f_hline(npw + offset, color.teal, 1, line.style_dotted)
+        // ---- regime + label ----
+        distPct = na(flip) ? na : (close - (flip + offset)) / (flip + offset) * 100
+        reg = na(distPct) ? -99 : math.abs(distPct) < neutralPct ? 0 : distPct > 0 ? 1 : -1
+        regTxt = reg == 1 ? "LONG GAMMA (pin/reversion)" : reg == -1 ? "SHORT GAMMA (trend/amplify)" : reg == 0 ? "FLIP ZONE" : "no flip found"
+        // staleness: only when the header carries a date
+        stale = false
+        dateTxt = "no snapshot date"
+        if yS > 0
+            snapT = timestamp("GMT", yS, mS, dS, 23, 59)
+            stale := (timenow - snapT) > 1000 * 60 * 60 * 36
+            dateTxt := str.tostring(yS) + "-" + (mS < 10 ? "0" : "") + str.tostring(mS) + "-" + (dS < 10 ? "0" : "") + str.tostring(dS)
+        // vanna > 0: falling vol forces dealers to BUY (and rising vol to sell).
+        // charm > 0: the passage of time forces buying, < 0 selling pressure.
+        flowTxt = not showFlow or (totVan == 0.0 and totChm == 0.0) ? "" :
+             "\nVanna " + (totVan > 0 ? "+" : "") + str.tostring(totVan / 1e6, "#.#") + "M (vol down = " + (totVan > 0 ? "BUY" : "SELL") + ")" +
+             (na(vanK) ? "" : " @" + str.tostring(vanK + offset, format.mintick)) +
+             "  |  Charm " + (totChm > 0 ? "+" : "") + str.tostring(totChm / 1e6, "#.#") + "M (time = " + (totChm > 0 ? "buy support" : "sell pressure") + ")" +
+             (na(chmK) ? "" : " @" + str.tostring(chmK + offset, format.mintick))
+        // v1.3.1: show which market block is active (multi-market pastes)
+        dbgTxt = showDbg ? "\n" + dbgS + " | spot " + str.tostring(spotS, format.mintick) : ""
+        // Version im Label: ohne sie ist beim Debuggen nicht feststellbar,
+        // welcher Stand auf dem Chart laeuft.
+        txt = "v1.6  " + (wantMkt != "" ? wantMkt + "  |  " : "") + regTxt +
+             (na(flip) ? "" : "  |  Flip " + str.tostring(flip + offset, format.mintick) + " (" + str.tostring(distPct, "#.##") + "%)") +
+             "\nNet GEX " + str.tostring(totGex / 1e9, "#.##") + " bn/1% | EM1d ±" + str.tostring(em, format.mintick) +
+             flowTxt +
+             (na(ncw) ? "" : "\nNear CW " + str.tostring(ncw + offset, format.mintick) + " | Near PW " + str.tostring(npw + offset, format.mintick)) +
+             "\nChain: " + dateTxt + (stale ? "  !! STALE — refresh the paste !!" : "") + dbgTxt
+        array.push(labs, label.new(bar_index, high, txt, style = label.style_label_left,
+             color = stale ? color.new(color.orange, 10) : reg == 1 ? color.new(color.green, 25) : reg == -1 ? color.new(color.red, 25) : color.new(color.gray, 25),
+             textcolor = stale ? color.black : color.white, size = size.small))
+
+bgcolor(showReg and not na(g_flip) ? (math.abs((close - g_flip) / g_flip * 100) < neutralPct ? color.new(color.gray, 90) : close > g_flip ? color.new(color.green, 93) : color.new(color.red, 93)) : na)
+
+// ------------------------------------------------------------- alerts -----
+alertcondition(ta.crossover(close, g_flip),  "Gamma: flip cross UP",   "Spot crossed the gamma flip UP -> toward long gamma / pinning")
+alertcondition(ta.crossunder(close, g_flip), "Gamma: flip cross DOWN", "Spot crossed the gamma flip DOWN -> short gamma / amplification")
+alertcondition(ta.crossunder(close, g_pw),   "Gamma: put wall BREAK",  "Put wall broken -> trapdoor open (amplification risk)")
+alertcondition(ta.crossover(close, g_pw),    "Gamma: put wall RECLAIM","Put wall reclaimed from below -> reversal signature")
+alertcondition(ta.crossover(close, g_cw),    "Gamma: call wall break UP", "Call wall exceeded -> usually magnet/pin, rarely continuation")

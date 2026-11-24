@@ -1,0 +1,192 @@
+//@version=6
+indicator("Candle RVOL", overlay=true)
+
+// =========================
+// Inputs
+// =========================
+int historyDays = input.int(14, "Lookback Days", minval=2, display=display.none)
+string labelPosition = input.string(
+    "top_right",
+    "Label Position",
+    options=[
+        "top_left", "top_center", "top_right",
+        "middle_left", "middle_center", "middle_right",
+        "bottom_left", "bottom_center", "bottom_right"
+    ],
+    display=display.none
+)
+
+// =========================
+// Constants / helpers
+// =========================
+string tz = "America/New_York"
+int regularSessionMinutes = 390
+
+var tablePosition = switch labelPosition
+    "top_left"      => position.top_left
+    "top_center"    => position.top_center
+    "top_right"     => position.top_right
+    "middle_left"   => position.middle_left
+    "middle_center" => position.middle_center
+    "middle_right"  => position.middle_right
+    "bottom_left"   => position.bottom_left
+    "bottom_center" => position.bottom_center
+    "bottom_right"  => position.bottom_right
+    => position.top_right
+
+// =========================
+// Timeframe support
+// =========================
+int tfSec = timeframe.in_seconds()
+bool isDailyChart = timeframe.isdaily
+bool isIntradayMinuteChart = timeframe.isintraday and (tfSec % 60 == 0)
+bool isSupported = isDailyChart or isIntradayMinuteChart
+
+int tfMinutes = isIntradayMinuteChart ? int(tfSec / 60) : na
+int candlesPerDay = isIntradayMinuteChart ? int(math.ceil(regularSessionMinutes / tfMinutes)) : 1
+int totalSlots = candlesPerDay * historyDays
+
+// =========================
+// Market hours
+// =========================
+isMarketHours() =>
+    int hr = hour(time, tz)
+    int mn = minute(time, tz)
+    (hr == 9 and mn >= 30) or (hr > 9 and hr < 16)
+
+// Current date key
+dateKey() =>
+    year(time, tz) * 10000 + month(time, tz) * 100 + dayofmonth(time, tz)
+
+// =========================
+// Intraday storage
+// =========================
+var float[] slotVolumes = array.new_float(0)
+var int lastSessionDate = na
+
+if barstate.isfirst and isIntradayMinuteChart
+    slotVolumes := array.new_float(totalSlots, 0.0)
+
+// Slot helpers
+f_index(slot, day) =>
+    slot * historyDays + day
+
+f_get(slot, day) =>
+    array.get(slotVolumes, f_index(slot, day))
+
+f_set(slot, day, val) =>
+    array.set(slotVolumes, f_index(slot, day), val)
+
+// Shift all slots left by one day
+f_shiftAll() =>
+    for s = 0 to candlesPerDay - 1
+        for d = 0 to historyDays - 2
+            f_set(s, d, f_get(s, d + 1))
+        f_set(s, historyDays - 1, 0.0)
+
+// =========================
+// Current intraday slot
+// =========================
+int hr = hour(time, tz)
+int mn = minute(time, tz)
+int minutesSinceOpen = (hr - 9) * 60 + (mn - 30)
+
+int currentSlot = (
+     isIntradayMinuteChart and isMarketHours()
+     ? math.min(math.max(int(math.floor(minutesSinceOpen / tfMinutes)), 0), candlesPerDay - 1)
+     : -1
+)
+
+// Detect first regular-hours bar of a new session
+if isIntradayMinuteChart and isMarketHours()
+    int curDate = dateKey()
+    if na(lastSessionDate)
+        lastSessionDate := curDate
+    else if curDate != lastSessionDate
+        f_shiftAll()
+        lastSessionDate := curDate
+
+// Store confirmed intraday bar volume in newest day bucket
+if isIntradayMinuteChart and isMarketHours() and barstate.isconfirmed and currentSlot >= 0
+    f_set(currentSlot, historyDays - 1, volume)
+
+// =========================
+// Intraday averages
+// =========================
+float intradayAvgForCurrentSlot = na
+float intradayLastCandleRvol = na
+float intradayCurrentRvol = na
+
+if isIntradayMinuteChart
+    float[] slotAverages = array.new_float(candlesPerDay, 0.0)
+
+    for slot = 0 to candlesPerDay - 1
+        float sumVol = 0.0
+        for d = 0 to historyDays - 2
+            sumVol += f_get(slot, d)
+        array.set(slotAverages, slot, sumVol / (historyDays - 1))
+
+    if currentSlot >= 0
+        intradayAvgForCurrentSlot := array.get(slotAverages, currentSlot)
+
+        float elapsedFraction = 1.0
+        if barstate.isrealtime
+            float barDurationMs = float(time_close - time)
+            float elapsedMs = float(timenow - time)
+            elapsedFraction := barDurationMs > 0 ? math.min(math.max(elapsedMs / barDurationMs, 0.0), 1.0) : 1.0
+
+        float scaledAvg = intradayAvgForCurrentSlot * elapsedFraction
+        intradayCurrentRvol := scaledAvg > 0 ? (volume / scaledAvg) * 100.0 : na
+
+    // Previous confirmed candle RVOL
+    if isMarketHours()[1]
+        int prevSlot = currentSlot[1]
+        if prevSlot >= 0 and prevSlot < candlesPerDay
+            float prevAvg = array.get(slotAverages, prevSlot)
+            intradayLastCandleRvol := prevAvg > 0 ? (volume[1] / prevAvg) * 100.0 : na
+
+// =========================
+// Daily branch
+// =========================
+float dailyCurrentRvol = na
+float dailyLastCandleRvol = na
+
+if isDailyChart
+    float avgPrevDays = ta.sma(volume[1], historyDays - 1)
+    float avgPrevDaysForLast = ta.sma(volume[2], historyDays - 1)
+
+    dailyCurrentRvol := avgPrevDays > 0 ? (volume / avgPrevDays) * 100.0 : na
+    dailyLastCandleRvol := avgPrevDaysForLast > 0 ? (volume[1] / avgPrevDaysForLast) * 100.0 : na
+
+// =========================
+// Final displayed values
+// =========================
+float currentRvol = isDailyChart ? dailyCurrentRvol : intradayCurrentRvol
+float lastCandleRvol = isDailyChart ? dailyLastCandleRvol : intradayLastCandleRvol
+
+string tfLabel =
+     isDailyChart ? "Daily" :
+     isIntradayMinuteChart ?
+         tfMinutes == 60  ? "1h" :
+         tfMinutes == 240 ? "4h" :
+         str.tostring(tfMinutes) + "m"
+     : "Unsupported"
+
+string currentRvolText = "Current " + tfLabel + " RVOL = " + (na(currentRvol) ? "N/A" : str.tostring(currentRvol, "#.##") + "%")
+string lastRvolText = "Last " + tfLabel + " RVOL = " + (na(lastCandleRvol) ? "N/A" : str.tostring(lastCandleRvol, "#.##") + "%")
+
+// =========================
+// Table display
+// =========================
+var table volumeTable = table.new(tablePosition, 1, 2, border_width=2)
+
+if barstate.islast
+    if not isSupported
+        table.cell(volumeTable, 0, 0, "Unsupported timeframe", bgcolor=color.new(color.orange, 0), text_color=color.white, text_size=size.normal)
+        table.cell(volumeTable, 0, 1, "Use minute charts or Daily", bgcolor=color.new(color.orange, 0), text_color=color.white, text_size=size.normal)
+    else
+        color bgcolorCurrent = na(currentRvol) ? color.new(color.gray, 0) : currentRvol > 100 ? color.new(#089981, 0) : color.new(#f23645, 0)
+        color bgcolorLast = na(lastCandleRvol) ? color.new(color.gray, 0) : lastCandleRvol > 100 ? color.new(#089981, 0) : color.new(#f23645, 0)
+
+        table.cell(volumeTable, 0, 0, currentRvolText, bgcolor=bgcolorCurrent, text_color=color.white, text_size=size.normal)
+        table.cell(volumeTable, 0, 1, lastRvolText, bgcolor=bgcolorLast, text_color=color.white, text_size=size.normal)

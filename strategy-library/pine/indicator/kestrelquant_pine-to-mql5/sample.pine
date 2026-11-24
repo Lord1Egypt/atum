@@ -1,0 +1,23 @@
+//@version=5
+indicator("Sample EMA Cross", overlay=true)
+
+fastLen = input.int(20, title="Fast EMA")
+slowLen = input.int(50, title="Slow EMA")
+
+fastEma = ta.ema(close, fastLen)
+slowEma = ta.ema(close, slowLen)
+rsiVal = ta.rsi(close, 14)
+
+longCond = crossover(fastEma, slowEma)
+shortCond = crossunder(fastEma, slowEma)
+
+plot(fastEma, title="Fast EMA")
+plot(slowEma, title="Slow EMA")
+plotshape(longCond, style=shape.triangleup)
+plotshape(shortCond, style=shape.triangledown)
+
+strategy.entry("Long", strategy.long, when=longCond)
+strategy.entry("Short", strategy.short, when=shortCond)
+
+alertcondition(longCond, title="Long Alert", message="EMA cross long")
+alertcondition(shortCond, title="Short Alert", message="EMA cross short")

@@ -1,0 +1,537 @@
+//@version=5
+indicator("PHASE 404 - Smart Money Indicator", shorttitle="P404", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ============================================================
+//  PHASE 404 - Smart Money Indicator
+//  Based on: AMD (Accumulation, Manipulation, Distribution)
+//  Concepts: Liquidity (BSL/SSL), MSS, OTE, OB, FVG, IFVG, Breaker
+// ============================================================
+
+// ─────────────────────────────────────────────
+// GROUP: LIQUIDITY SETTINGS
+// ─────────────────────────────────────────────
+grp_liq = "💧 Liquidity Levels"
+show_liq        = input.bool(true,  "Show Liquidity Levels",          group=grp_liq)
+liq_tf_1m       = input.bool(false, "1m Liquidity",                   group=grp_liq)
+liq_tf_5m       = input.bool(true,  "5m Liquidity",                   group=grp_liq)
+liq_tf_15m      = input.bool(true,  "15m Liquidity",                  group=grp_liq)
+liq_tf_1h       = input.bool(false, "1H Liquidity",                   group=grp_liq)
+liq_lookback    = input.int(50,     "Liquidity Lookback (bars)",       group=grp_liq, minval=10, maxval=200)
+bsl_col         = input.color(color.new(#00C853, 70), "BSL Color",    group=grp_liq)
+ssl_col         = input.color(color.new(#FF1744, 70), "SSL Color",    group=grp_liq)
+liq_extend      = input.int(20,     "Extend Lines (bars)",             group=grp_liq, minval=1, maxval=100)
+swept_col       = input.color(color.new(#9E9E9E, 80), "Swept Level Color", group=grp_liq)
+
+// ─────────────────────────────────────────────
+// GROUP: MSS SETTINGS
+// ─────────────────────────────────────────────
+grp_mss = "🔄 Market Structure Shift (MSS)"
+show_mss        = input.bool(true,  "Show MSS",                        group=grp_mss)
+mss_bull_col    = input.color(color.new(#00BCD4, 0),  "Bullish MSS",  group=grp_mss)
+mss_bear_col    = input.color(color.new(#FF5722, 0),  "Bearish MSS",  group=grp_mss)
+mss_swing_len   = input.int(5,      "Swing Length for MSS",            group=grp_mss, minval=2, maxval=20)
+
+// ─────────────────────────────────────────────
+// GROUP: OTE SETTINGS
+// ─────────────────────────────────────────────
+grp_ote = "🎯 OTE Zone (Optimal Trade Entry)"
+show_ote        = input.bool(true,  "Show OTE Zone",                   group=grp_ote)
+ote_col_bull    = input.color(color.new(#00E676, 80), "Bullish OTE",  group=grp_ote)
+ote_col_bear    = input.color(color.new(#FF1744, 80), "Bearish OTE",  group=grp_ote)
+show_eq         = input.bool(true,  "Show Equilibrium (0.5)",          group=grp_ote)
+eq_col          = input.color(color.new(#FFD600, 0),  "Equilibrium",  group=grp_ote)
+ote_extend_bars = input.int(30,     "OTE Zone Extend (bars)",          group=grp_ote, minval=5, maxval=100)
+
+// ─────────────────────────────────────────────
+// GROUP: ORDER BLOCK SETTINGS
+// ─────────────────────────────────────────────
+grp_ob = "📦 Order Blocks (OB)"
+show_ob         = input.bool(true,  "Show Order Blocks",               group=grp_ob)
+ob_bull_col     = input.color(color.new(#00C853, 75), "Bullish OB",   group=grp_ob)
+ob_bear_col     = input.color(color.new(#D50000, 75), "Bearish OB",   group=grp_ob)
+ob_swing_len    = input.int(5,      "OB Swing Strength",               group=grp_ob, minval=2, maxval=20)
+ob_max          = input.int(3,      "Max OBs to Show",                 group=grp_ob, minval=1, maxval=10)
+ob_mitigated    = input.bool(true,  "Show Mitigated OBs (faded)",      group=grp_ob)
+
+// ─────────────────────────────────────────────
+// GROUP: FVG SETTINGS
+// ─────────────────────────────────────────────
+grp_fvg = "⚡ Fair Value Gaps (FVG)"
+show_fvg        = input.bool(true,  "Show FVGs",                       group=grp_fvg)
+fvg_bull_col    = input.color(color.new(#00BFA5, 80), "Bullish FVG",  group=grp_fvg)
+fvg_bear_col    = input.color(color.new(#FF6D00, 80), "Bearish FVG",  group=grp_fvg)
+fvg_max         = input.int(3,      "Max FVGs to Show",                group=grp_fvg, minval=1, maxval=10)
+fvg_mitigated   = input.bool(false, "Show Mitigated FVGs",             group=grp_fvg)
+
+// ─────────────────────────────────────────────
+// GROUP: IFVG SETTINGS
+// ─────────────────────────────────────────────
+grp_ifvg = "🔁 Inversed FVGs (IFVG)"
+show_ifvg       = input.bool(true,  "Show IFVGs",                      group=grp_ifvg)
+ifvg_bull_col   = input.color(color.new(#76FF03, 75), "Bullish IFVG", group=grp_ifvg)
+ifvg_bear_col   = input.color(color.new(#FF4081, 75), "Bearish IFVG", group=grp_ifvg)
+ifvg_max        = input.int(3,      "Max IFVGs to Show",               group=grp_ifvg, minval=1, maxval=10)
+
+// ─────────────────────────────────────────────
+// GROUP: BREAKER BLOCK SETTINGS
+// ─────────────────────────────────────────────
+grp_bb = "💥 Breaker Blocks"
+show_bb         = input.bool(true,  "Show Breaker Blocks",             group=grp_bb)
+bb_bull_col     = input.color(color.new(#64FFDA, 75), "Bullish Breaker", group=grp_bb)
+bb_bear_col     = input.color(color.new(#FF6E40, 75), "Bearish Breaker", group=grp_bb)
+bb_max          = input.int(3,      "Max Breakers to Show",            group=grp_bb, minval=1, maxval=10)
+
+// ─────────────────────────────────────────────
+// GROUP: KILL ZONE SETTINGS
+// ─────────────────────────────────────────────
+grp_kz = "⏰ Kill Zones"
+show_kz         = input.bool(true,  "Show Kill Zones",                 group=grp_kz)
+kz_london       = input.bool(true,  "London Open (02:00–05:00 NY)",    group=grp_kz)
+kz_ny           = input.bool(true,  "NY Open (07:00–10:00 NY)",        group=grp_kz)
+kz_london_col   = input.color(color.new(#1565C0, 88), "London Color", group=grp_kz)
+kz_ny_col       = input.color(color.new(#6A1B9A, 88), "NY Color",     group=grp_kz)
+kz_timezone     = input.string("America/New_York", "Timezone",        group=grp_kz)
+
+// ─────────────────────────────────────────────
+// GROUP: SIGNAL LABELS
+// ─────────────────────────────────────────────
+grp_sig = "🚦 Entry Signals"
+show_signals    = input.bool(true, "Show Entry Signals",               group=grp_sig)
+sig_bull_col    = input.color(color.new(#00E676, 0), "Bullish Signal", group=grp_sig)
+sig_bear_col    = input.color(color.new(#FF1744, 0), "Bearish Signal", group=grp_sig)
+
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
+
+// Pivot High / Low detection
+pivotHigh(len) =>
+    ta.pivothigh(high, len, len)
+
+pivotLow(len) =>
+    ta.pivotlow(low, len, len)
+
+// Check if candle is bullish/bearish
+isBull = close > open
+isBear = close < open
+
+// ============================================================
+// SECTION 1: LIQUIDITY LEVELS (BSL / SSL)
+// ============================================================
+// We detect swing highs = Buy Side Liquidity (BSL)
+// We detect swing lows  = Sell Side Liquidity (SSL)
+// These are areas where stops accumulate
+
+var line[] bsl_lines = array.new_line()
+var line[] ssl_lines = array.new_line()
+var float[] bsl_levels = array.new_float()
+var float[] ssl_levels = array.new_float()
+
+// Helper: draw liquidity line
+drawLiqLine(price, is_bsl, bar_idx) =>
+    col = is_bsl ? bsl_col : ssl_col
+    ln = line.new(bar_idx, price, bar_idx + liq_extend, price,
+         color=col, width=1, style=line.style_dashed)
+    lbl_txt = is_bsl ? "BSL" : "SSL"
+    label.new(bar_idx + liq_extend, price, lbl_txt,
+         style=label.style_label_left,
+         color=color.new(is_bsl ? color.green : color.red, 80),
+         textcolor=is_bsl ? color.green : color.red,
+         size=size.tiny)
+    ln
+
+// Detect and draw liquidity from selected timeframes
+liq_tf_active(tf) =>
+    switch tf
+        "1"  => liq_tf_1m
+        "5"  => liq_tf_5m
+        "15" => liq_tf_15m
+        "60" => liq_tf_1h
+        => false
+
+// Current chart timeframe liquidity detection
+ph = pivotHigh(liq_lookback / 4)
+pl = pivotLow(liq_lookback / 4)
+
+if show_liq
+    if not na(ph)
+        ln = drawLiqLine(ph, true, bar_index - (liq_lookback / 4))
+        array.push(bsl_lines, ln)
+        array.push(bsl_levels, ph)
+        if array.size(bsl_lines) > 10
+            old = array.shift(bsl_lines)
+            line.delete(old)
+            array.shift(bsl_levels)
+
+    if not na(pl)
+        ln = drawLiqLine(pl, false, bar_index - (liq_lookback / 4))
+        array.push(ssl_lines, ln)
+        array.push(ssl_levels, pl)
+        if array.size(ssl_lines) > 10
+            old = array.shift(ssl_lines)
+            line.delete(old)
+            array.shift(ssl_levels)
+
+// Detect liquidity sweep (price wicks through then closes back)
+bsl_swept = false
+ssl_swept = false
+swept_level = 0.0
+
+if show_liq and array.size(bsl_levels) > 0
+    for i = 0 to array.size(bsl_levels) - 1
+        lvl = array.get(bsl_levels, i)
+        if high > lvl and close < lvl
+            bsl_swept := true
+            swept_level := lvl
+
+if show_liq and array.size(ssl_levels) > 0
+    for i = 0 to array.size(ssl_levels) - 1
+        lvl = array.get(ssl_levels, i)
+        if low < lvl and close > lvl
+            ssl_swept := true
+            swept_level := lvl
+
+// Plot sweep signals
+plotshape(show_liq and bsl_swept, "BSL Swept", shape.xcross, location.abovebar, color.new(color.red, 20), size=size.small)
+plotshape(show_liq and ssl_swept, "SSL Swept", shape.xcross, location.belowbar, color.new(color.green, 20), size=size.small)
+
+// ============================================================
+// SECTION 2: MARKET STRUCTURE SHIFT (MSS)
+// ============================================================
+
+var float mss_swing_high = na
+var float mss_swing_low  = na
+var int   mss_high_bar   = na
+var int   mss_low_bar    = na
+var bool  mss_bull_triggered = false
+var bool  mss_bear_triggered = false
+
+swing_ph = pivotHigh(mss_swing_len)
+swing_pl = pivotLow(mss_swing_len)
+
+if not na(swing_ph)
+    mss_swing_high := swing_ph
+    mss_high_bar   := bar_index - mss_swing_len
+
+if not na(swing_pl)
+    mss_swing_low := swing_pl
+    mss_low_bar   := bar_index - mss_swing_len
+
+// Bullish MSS: price breaks above a recent swing high after sweeping SSL
+bullish_mss = show_mss and not na(mss_swing_high) and close > mss_swing_high and close[1] <= mss_swing_high
+bearish_mss = show_mss and not na(mss_swing_low)  and close < mss_swing_low  and close[1] >= mss_swing_low
+
+if bullish_mss
+    line.new(mss_high_bar, mss_swing_high, bar_index, mss_swing_high,
+         color=mss_bull_col, width=2, style=line.style_solid)
+    label.new(bar_index, high, "MSS ▲", style=label.style_label_down,
+         color=color.new(mss_bull_col, 30), textcolor=color.white, size=size.small)
+
+if bearish_mss
+    line.new(mss_low_bar, mss_swing_low, bar_index, mss_swing_low,
+         color=mss_bear_col, width=2, style=line.style_solid)
+    label.new(bar_index, low, "MSS ▼", style=label.style_label_up,
+         color=color.new(mss_bear_col, 30), textcolor=color.white, size=size.small)
+
+// ============================================================
+// SECTION 3: OTE ZONE (Optimal Trade Entry — Fib 0.618–0.786)
+// ============================================================
+// Drawn after MSS is confirmed — from the manipulation swing to MSS point
+
+var float ote_swing_origin = na  // The manipulation extreme (low for bull, high for bear)
+var float ote_mss_point    = na  // The MSS break point
+var bool  ote_is_bull      = false
+var box   ote_box          = na
+var line  ote_eq_line      = na
+var line  ote_618_line     = na
+var line  ote_786_line     = na
+
+// On bullish MSS: origin = recent swing low (manipulation), mss point = close
+if bullish_mss and not na(mss_swing_low)
+    ote_swing_origin := mss_swing_low
+    ote_mss_point    := close
+    ote_is_bull      := true
+
+    range_size = ote_mss_point - ote_swing_origin
+    lvl_618    = ote_mss_point - range_size * 0.618
+    lvl_786    = ote_mss_point - range_size * 0.786
+    lvl_50     = ote_mss_point - range_size * 0.500
+
+    if show_ote
+        if not na(ote_box)
+            box.delete(ote_box)
+        ote_box := box.new(bar_index, lvl_618, bar_index + ote_extend_bars, lvl_786,
+             bgcolor=ote_col_bull, border_color=color.new(color.green, 40),
+             border_width=1)
+        label.new(bar_index + 2, lvl_618, "OTE 🎯", style=label.style_label_right,
+             color=color.new(color.green, 50), textcolor=color.white, size=size.small)
+        label.new(bar_index + 2, lvl_786, "0.786", style=label.style_label_right,
+             color=color.new(color.green, 70), textcolor=color.white, size=size.tiny)
+
+        if show_eq
+            if not na(ote_eq_line)
+                line.delete(ote_eq_line)
+            ote_eq_line := line.new(bar_index, lvl_50, bar_index + ote_extend_bars, lvl_50,
+                 color=eq_col, width=1, style=line.style_dotted)
+            label.new(bar_index + ote_extend_bars, lvl_50, "EQ 0.5",
+                 style=label.style_label_left, color=color.new(eq_col, 60),
+                 textcolor=color.yellow, size=size.tiny)
+
+// On bearish MSS: origin = recent swing high (manipulation), mss point = close
+if bearish_mss and not na(mss_swing_high)
+    ote_swing_origin := mss_swing_high
+    ote_mss_point    := close
+    ote_is_bull      := false
+
+    range_size = ote_swing_origin - ote_mss_point
+    lvl_618    = ote_mss_point + range_size * 0.618
+    lvl_786    = ote_mss_point + range_size * 0.786
+    lvl_50     = ote_mss_point + range_size * 0.500
+
+    if show_ote
+        if not na(ote_box)
+            box.delete(ote_box)
+        ote_box := box.new(bar_index, lvl_786, bar_index + ote_extend_bars, lvl_618,
+             bgcolor=ote_col_bear, border_color=color.new(color.red, 40),
+             border_width=1)
+        label.new(bar_index + 2, lvl_618, "OTE 🎯", style=label.style_label_right,
+             color=color.new(color.red, 50), textcolor=color.white, size=size.small)
+        label.new(bar_index + 2, lvl_786, "0.786", style=label.style_label_right,
+             color=color.new(color.red, 70), textcolor=color.white, size=size.tiny)
+
+        if show_eq
+            if not na(ote_eq_line)
+                line.delete(ote_eq_line)
+            ote_eq_line := line.new(bar_index, lvl_50, bar_index + ote_extend_bars, lvl_50,
+                 color=eq_col, width=1, style=line.style_dotted)
+            label.new(bar_index + ote_extend_bars, lvl_50, "EQ 0.5",
+                 style=label.style_label_left, color=color.new(eq_col, 60),
+                 textcolor=color.yellow, size=size.tiny)
+
+// ============================================================
+// SECTION 4: ORDER BLOCKS (OB)
+// ============================================================
+// Bullish OB = last bearish candle before a strong bullish move
+// Bearish OB = last bullish candle before a strong bearish move
+
+var int   ob_bull_count = 0
+var int   ob_bear_count = 0
+
+ob_ph = pivotHigh(ob_swing_len)
+ob_pl = pivotLow(ob_swing_len)
+
+// Bullish OB detection: bearish candle followed by strong up move
+bull_ob_cond = show_ob and isBear[1] and close > high[1] and (close - open) > (high[1] - low[1]) * 0.5
+bear_ob_cond = show_ob and isBull[1] and close < low[1]  and (open - close) > (high[1] - low[1]) * 0.5
+
+if bull_ob_cond and ob_bull_count < ob_max
+    bx = box.new(bar_index - 1, high[1], bar_index + 40, low[1],
+         bgcolor=ob_bull_col, border_color=color.new(color.green, 40), border_width=1)
+    label.new(bar_index - 1, high[1], "OB", style=label.style_label_down,
+         color=color.new(color.green, 50), textcolor=color.white, size=size.tiny)
+    ob_bull_count += 1
+
+if bear_ob_cond and ob_bear_count < ob_max
+    bx = box.new(bar_index - 1, high[1], bar_index + 40, low[1],
+         bgcolor=ob_bear_col, border_color=color.new(color.red, 40), border_width=1)
+    label.new(bar_index - 1, low[1], "OB", style=label.style_label_up,
+         color=color.new(color.red, 50), textcolor=color.white, size=size.tiny)
+    ob_bear_count += 1
+
+// Reset counts every 100 bars to allow new OBs
+if bar_index % 100 == 0
+    ob_bull_count := 0
+    ob_bear_count := 0
+
+// ============================================================
+// SECTION 5: FAIR VALUE GAPS (FVG)
+// ============================================================
+// Bullish FVG: low[0] > high[2] → gap between candle 3's high and candle 1's low
+// Bearish FVG: high[0] < low[2] → gap between candle 3's low and candle 1's high
+
+var int fvg_bull_count = 0
+var int fvg_bear_count = 0
+
+bull_fvg = show_fvg and low > high[2]
+bear_fvg = show_fvg and high < low[2]
+
+if bull_fvg and fvg_bull_count < fvg_max
+    box.new(bar_index - 2, low, bar_index + 30, high[2],
+         bgcolor=fvg_bull_col, border_color=color.new(color.teal, 40), border_width=1)
+    label.new(bar_index - 1, low, "FVG", style=label.style_label_up,
+         color=color.new(color.teal, 50), textcolor=color.white, size=size.tiny)
+    fvg_bull_count += 1
+
+if bear_fvg and fvg_bear_count < fvg_max
+    box.new(bar_index - 2, low[2], bar_index + 30, high,
+         bgcolor=fvg_bear_col, border_color=color.new(color.orange, 40), border_width=1)
+    label.new(bar_index - 1, high, "FVG", style=label.style_label_down,
+         color=color.new(color.orange, 50), textcolor=color.white, size=size.tiny)
+    fvg_bear_count += 1
+
+if bar_index % 100 == 0
+    fvg_bull_count := 0
+    fvg_bear_count := 0
+
+// ============================================================
+// SECTION 6: INVERSED FAIR VALUE GAPS (IFVG)
+// ============================================================
+// An IFVG forms when price partially fills an FVG but fails to close it fully.
+// The unfilled portion flips into a support/resistance zone.
+// Detected: bullish FVG 2 bars ago that price has now entered but NOT fully closed
+
+var float ifvg_bull_top    = na
+var float ifvg_bull_bot    = na
+var int   ifvg_bull_bar    = na
+var float ifvg_bear_top    = na
+var float ifvg_bear_bot    = na
+var int   ifvg_bear_bar    = na
+var int   ifvg_bull_count  = 0
+var int   ifvg_bear_count  = 0
+
+// Look back for FVG zones that price has re-entered (partial fill → IFVG)
+// Bullish FVG that price revisits from above and rejects → becomes IFVG support
+// We approximate: look for a 3-candle pattern where a gap was formed and then tested
+bull_ifvg_cond = show_ifvg and low[2] > high[4] and         // FVG formed 2 bars ago
+                 low[1] <= low[2] and close[1] > high[4]    // Price entered but did not close below FVG
+
+bear_ifvg_cond = show_ifvg and high[2] < low[4] and         // Bearish FVG formed 2 bars ago
+                 high[1] >= high[2] and close[1] < low[4]   // Price entered but did not close above FVG
+
+if bull_ifvg_cond and ifvg_bull_count < ifvg_max
+    box.new(bar_index - 3, low[2], bar_index + 30, high[4],
+         bgcolor=ifvg_bull_col, border_color=color.new(#76FF03, 40), border_width=1)
+    label.new(bar_index - 2, low[2], "IFVG", style=label.style_label_up,
+         color=color.new(#76FF03, 50), textcolor=color.white, size=size.tiny)
+    ifvg_bull_count += 1
+
+if bear_ifvg_cond and ifvg_bear_count < ifvg_max
+    box.new(bar_index - 3, low[4], bar_index + 30, high[2],
+         bgcolor=ifvg_bear_col, border_color=color.new(#FF4081, 40), border_width=1)
+    label.new(bar_index - 2, high[2], "IFVG", style=label.style_label_down,
+         color=color.new(#FF4081, 50), textcolor=color.white, size=size.tiny)
+    ifvg_bear_count += 1
+
+if bar_index % 100 == 0
+    ifvg_bull_count := 0
+    ifvg_bear_count := 0
+
+// ============================================================
+// SECTION 7: BREAKER BLOCKS
+// ============================================================
+// Breaker = an OB that was violated (price broke through) and is now re-tested
+// Bullish Breaker: was a bearish OB, price broke above it → now support
+// Bearish Breaker: was a bullish OB, price broke below it → now resistance
+
+var float bb_bull_high = na
+var float bb_bull_low  = na
+var float bb_bear_high = na
+var float bb_bear_low  = na
+var int   bb_bull_count = 0
+var int   bb_bear_count = 0
+
+// Bullish Breaker: prior bearish move, then strong break upward through that zone, then retest
+bull_break_cond = show_bb and isBull and close[2] < open[2] and close > high[2] and
+                  close[1] > open[2] // Strong move up through prior bearish candle
+
+// Bearish Breaker: prior bullish move, then strong break downward, then retest
+bear_break_cond = show_bb and isBear and close[2] > open[2] and close < low[2] and
+                  close[1] < open[2] // Strong move down through prior bullish candle
+
+if bull_break_cond and bb_bull_count < bb_max
+    box.new(bar_index - 2, high[2], bar_index + 40, low[2],
+         bgcolor=bb_bull_col, border_color=color.new(#64FFDA, 40), border_width=1)
+    label.new(bar_index - 2, high[2], "BRK", style=label.style_label_down,
+         color=color.new(#64FFDA, 50), textcolor=color.black, size=size.tiny)
+    bb_bull_count += 1
+
+if bear_break_cond and bb_bear_count < bb_max
+    box.new(bar_index - 2, high[2], bar_index + 40, low[2],
+         bgcolor=bb_bear_col, border_color=color.new(#FF6E40, 40), border_width=1)
+    label.new(bar_index - 2, low[2], "BRK", style=label.style_label_up,
+         color=color.new(#FF6E40, 50), textcolor=color.white, size=size.tiny)
+    bb_bear_count += 1
+
+if bar_index % 100 == 0
+    bb_bull_count := 0
+    bb_bear_count := 0
+
+// ============================================================
+// SECTION 8: KILL ZONES
+// ============================================================
+// London Open: 02:00–05:00 NY time
+// NY Open:     07:00–10:00 NY time
+
+kz_hour = hour(time, kz_timezone)
+kz_min  = minute(time, kz_timezone)
+
+is_london_kz = show_kz and kz_london and kz_hour >= 2 and kz_hour < 5
+is_ny_kz     = show_kz and kz_ny     and kz_hour >= 7 and kz_hour < 10
+
+bgcolor(is_london_kz ? kz_london_col : na, title="London Kill Zone")
+bgcolor(is_ny_kz     ? kz_ny_col     : na, title="NY Kill Zone")
+
+// Kill Zone Labels (only on first bar of session)
+if is_london_kz and not is_london_kz[1]
+    label.new(bar_index, low, "🇬🇧 London KZ", style=label.style_label_up,
+         color=color.new(#1565C0, 50), textcolor=color.white, size=size.small)
+
+if is_ny_kz and not is_ny_kz[1]
+    label.new(bar_index, low, "🗽 NY KZ", style=label.style_label_up,
+         color=color.new(#6A1B9A, 50), textcolor=color.white, size=size.small)
+
+// ============================================================
+// SECTION 9: FULL ENTRY SIGNAL
+// ============================================================
+// BULLISH SIGNAL: SSL swept + MSS bullish + price touches OTE zone
+// BEARISH SIGNAL: BSL swept + MSS bearish + price touches OTE zone
+
+// Track OTE zones for signal detection
+var float ote_bull_top = na
+var float ote_bull_bot = na
+var float ote_bear_top = na
+var float ote_bear_bot = na
+
+if bullish_mss and not na(mss_swing_low)
+    r = close - mss_swing_low
+    ote_bull_top := close - r * 0.618
+    ote_bull_bot := close - r * 0.786
+
+if bearish_mss and not na(mss_swing_high)
+    r = mss_swing_high - close
+    ote_bear_top := close + r * 0.786
+    ote_bear_bot := close + r * 0.618
+
+// Entry signal: price re-enters OTE zone after MSS
+bull_signal = show_signals and ssl_swept and
+              not na(ote_bull_top) and not na(ote_bull_bot) and
+              low <= ote_bull_top and close >= ote_bull_bot and
+              (is_london_kz or is_ny_kz)
+
+bear_signal = show_signals and bsl_swept and
+              not na(ote_bear_top) and not na(ote_bear_bot) and
+              high >= ote_bear_bot and close <= ote_bear_top and
+              (is_london_kz or is_ny_kz)
+
+plotshape(bull_signal, "LONG Entry 🟢", shape.triangleup,   location.belowbar, sig_bull_col, size=size.normal)
+plotshape(bear_signal, "SHORT Entry 🔴", shape.triangledown, location.abovebar, sig_bear_col, size=size.normal)
+
+if bull_signal
+    label.new(bar_index, low, "LONG\nOTE+MSS+SSL", style=label.style_label_up,
+         color=color.new(sig_bull_col, 20), textcolor=color.white, size=size.small)
+
+if bear_signal
+    label.new(bar_index, high, "SHORT\nOTE+MSS+BSL", style=label.style_label_down,
+         color=color.new(sig_bear_col, 20), textcolor=color.white, size=size.small)
+
+// ============================================================
+// SECTION 10: ALERTS
+// ============================================================
+alertcondition(bullish_mss,  "P404: Bullish MSS",    "PHASE 404 — Bullish Market Structure Shift detected")
+alertcondition(bearish_mss,  "P404: Bearish MSS",    "PHASE 404 — Bearish Market Structure Shift detected")
+alertcondition(ssl_swept,    "P404: SSL Swept",       "PHASE 404 — Sell Side Liquidity Swept")
+alertcondition(bsl_swept,    "P404: BSL Swept",       "PHASE 404 — Buy Side Liquidity Swept")
+alertcondition(bull_signal,  "P404: LONG Signal 🟢",  "PHASE 404 — LONG Entry Signal: OTE + MSS + SSL Swept in Kill Zone")
+alertcondition(bear_signal,  "P404: SHORT Signal 🔴", "PHASE 404 — SHORT Entry Signal: OTE + MSS + BSL Swept in Kill Zone")
+alertcondition(bull_fvg,     "P404: Bullish FVG",    "PHASE 404 — Bullish Fair Value Gap formed")
+alertcondition(bear_fvg,     "P404: Bearish FVG",    "PHASE 404 — Bearish Fair Value Gap formed")

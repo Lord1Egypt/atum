@@ -1,0 +1,8 @@
+//@version=5
+indicator("constants/error_namespace_reassignment")
+// Test that namespace objects (color, math, etc.) cannot be reassigned
+
+color := "test"  // This should fail
+
+// Expected error:
+// error [reassign-builtin] 5:1: cannot reassign built-in `color`

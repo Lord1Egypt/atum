@@ -1,0 +1,132 @@
+//@version=5
+// Minimal smoke strategy aligned with PHASE404 playbook:
+// HTF bias (optional) → liquidity range → sweep → MSS → OTE 0.618–0.786 → confirm with candle.
+// Exits on opposite signal only (no ATR/EMA/ADX layers).
+strategy("P404 Smoke", shorttitle="P404⚙", overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05,
+     pyramiding=0,
+     process_orders_on_close=true)
+
+grp_htf = "HTF bias (optional)"
+use_htf = input.bool(false, "Filter by higher timeframe trend", group=grp_htf,
+     tooltip="Rough 4H bias: price vs EMA. Chart can be 15m; playbook uses 4H/1D for direction.")
+htf_tf  = input.timeframe("240", "Higher timeframe", group=grp_htf)
+htf_ema = input.int(20, "HTF EMA length", group=grp_htf, minval=2)
+
+grp_liq = "Liquidity"
+liq_lb = input.int(30, "Lookback (bars)", group=grp_liq, minval=5, maxval=200)
+
+grp_mss = "MSS"
+mss_len = input.int(5, "Swing length", group=grp_mss, minval=2, maxval=20)
+mss_grab_max = input.int(120, "Max bars: liquidity grab → MSS", group=grp_mss, minval=5, maxval=500)
+
+grp_flt = "Filters (match v2 indicator)"
+req_kz    = input.bool(false, "Require London or NY session", group=grp_flt,
+     tooltip="Playbook is discretionary on time; default off so entries are not session-gated.")
+ote_slack_ticks = input.int(2, "OTE band slack (ticks)", group=grp_flt, minval=0, maxval=50)
+
+grp_kz = "Kill zones (if required)"
+kz_london = input.bool(true, "London 02–05 NY", group=grp_kz)
+kz_ny     = input.bool(true, "NY 07–10 NY", group=grp_kz)
+kz_tz     = input.string("America/New_York", "Timezone", group=grp_kz)
+
+grp_run = "Run"
+show_sig = input.bool(true, "Enable entries", group=grp_run)
+
+ph(len) => ta.pivothigh(high, len, len)
+pl(len) => ta.pivotlow(low, len, len)
+
+isBull = close > open
+isBear = close < open
+
+// HTF bias (non-repainting request)
+htf_ema_v = request.security(syminfo.tickerid, htf_tf, ta.ema(close, htf_ema), barmerge.gaps_off, barmerge.lookahead_off)
+htf_c = request.security(syminfo.tickerid, htf_tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+htf_long_ok = not use_htf or htf_c > htf_ema_v
+htf_short_ok = not use_htf or htf_c < htf_ema_v
+
+var float bslPrice = na
+var float sslPrice = na
+_ph = ph(liq_lb / 3)
+_pl = pl(liq_lb / 3)
+if not na(_ph)
+    bslPrice := _ph
+if not na(_pl)
+    sslPrice := _pl
+
+bsl_swept = not na(bslPrice) and high > bslPrice and close < bslPrice
+ssl_swept = not na(sslPrice) and low < sslPrice and close > sslPrice
+
+var int last_bsl_grab_bi = na
+var int last_ssl_grab_bi = na
+if bsl_swept
+    last_bsl_grab_bi := bar_index
+if ssl_swept
+    last_ssl_grab_bi := bar_index
+
+var float mss_high_ref = na
+var float mss_low_ref  = na
+_mph = ph(mss_len)
+_mpl = pl(mss_len)
+if not na(_mph)
+    mss_high_ref := _mph
+if not na(_mpl)
+    mss_low_ref := _mpl
+
+bull_mss_struct = not na(mss_high_ref) and close > mss_high_ref and close[1] <= mss_high_ref
+bear_mss_struct = not na(mss_low_ref) and close < mss_low_ref and close[1] >= mss_low_ref
+bars_since_ssl_grab = not na(last_ssl_grab_bi) ? bar_index - last_ssl_grab_bi : 100000000
+bars_since_bsl_grab = not na(last_bsl_grab_bi) ? bar_index - last_bsl_grab_bi : 100000000
+bull_mss_valid = bull_mss_struct and not na(last_ssl_grab_bi) and last_ssl_grab_bi < bar_index and bars_since_ssl_grab <= mss_grab_max
+bear_mss_valid = bear_mss_struct and not na(last_bsl_grab_bi) and last_bsl_grab_bi < bar_index and bars_since_bsl_grab <= mss_grab_max
+
+var float ote_top_active = na
+var float ote_bot_active = na
+var bool  ote_is_bull    = false
+var bool  ote_bull_pending = false
+var bool  ote_bear_pending = false
+
+if bull_mss_valid and not na(sslPrice) and not ote_bull_pending[1]
+    r = close - sslPrice
+    ote_top_active := close - r * 0.618
+    ote_bot_active := close - r * 0.786
+    ote_is_bull := true
+    ote_bull_pending := true
+    ote_bear_pending := false
+
+if bear_mss_valid and not na(bslPrice) and not ote_bear_pending[1]
+    r = bslPrice - close
+    ote_top_active := close + r * 0.786
+    ote_bot_active := close + r * 0.618
+    ote_is_bull := false
+    ote_bear_pending := true
+    ote_bull_pending := false
+
+kz_hr = hour(time, kz_tz)
+in_london = kz_london and kz_hr >= 2 and kz_hr < 5
+in_ny     = kz_ny and kz_hr >= 7 and kz_hr < 10
+in_kz     = in_london or in_ny
+
+ote_slack = ote_slack_ticks * syminfo.mintick
+in_ote_bull = not na(ote_top_active) and ote_is_bull and low <= ote_top_active + ote_slack and high >= ote_bot_active - ote_slack
+in_ote_bear = not na(ote_top_active) and not ote_is_bull and high >= ote_bot_active - ote_slack and low <= ote_top_active + ote_slack
+
+kz_ok = not req_kz or in_kz
+
+long_signal  = show_sig and in_ote_bull and isBull and kz_ok and htf_long_ok
+short_signal = show_sig and in_ote_bear and isBear and kz_ok and htf_short_ok
+
+if long_signal
+    ote_bull_pending := false
+    strategy.entry("LONG", strategy.long)
+
+if short_signal
+    ote_bear_pending := false
+    strategy.entry("SHORT", strategy.short)
+
+plotshape(long_signal, "LONG", shape.triangleup, location.belowbar, size=size.tiny, color=color.new(#00E676, 35))
+plotshape(short_signal, "SHORT", shape.triangledown, location.abovebar, size=size.tiny, color=color.new(#FF1744, 35))

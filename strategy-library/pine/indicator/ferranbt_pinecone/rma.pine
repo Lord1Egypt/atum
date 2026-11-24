@@ -1,0 +1,21 @@
+//@version=5
+indicator("ta/rma")
+// Test ta.rma (Rolling Moving Average / Wilder's Smoothing)
+// Same recursion as ta.ema but with alpha = 1/length, so it smooths more
+// slowly. Over the last 4 bars close is 298, 299, 300, 301.
+//
+// Length 2 gives alpha = 0.5, so the arithmetic is exact:
+//   bar 2 seeds with mean(298,299)         -> 298.5
+//   bar 3: 0.5*300 + 0.5*298.5             -> 299.25
+//   bar 4: 0.5*301 + 0.5*299.25            -> 300.125
+
+// Bars: 4
+
+rma2 = ta.rma(close, 2)
+log.info(str.tostring(rma2))
+
+// Expected output:
+// NaN
+// 298.5
+// 299.25
+// 300.125

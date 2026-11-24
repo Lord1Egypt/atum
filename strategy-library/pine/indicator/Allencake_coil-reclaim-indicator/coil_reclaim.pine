@@ -1,0 +1,707 @@
+//@version=5
+// Coil Reclaim · 两根K线定方向 · 时段首小时
+// 三步：① 方向（昨天日线 + 盘前最后一根4小时）② 区域（日线天花板/地板、干净区、盘前4小时）
+//       ③ 触发（首小时内：区间 → 强突破K线 → 先回踩（橡皮筋）→ 突破价挂单成交）
+// 出场：1R 先平一半并把止损挪到保本，剩下的看下一个天花板/地板。
+// 全部在收盘K线上计算，高周期只读已收盘的K线，不重绘。
+// 图上所有价位只是规则标记，不构成投资建议。
+// MIT License · Copyright (c) 2026 Allencake
+
+indicator("Coil Reclaim · 两根K线定方向", shorttitle="CoilReclaim", overlay=true, max_labels_count=300, max_boxes_count=100, max_lines_count=150)
+
+// ═════════════ 参数 ═════════════
+G1 = "① 方向 Story"
+G2 = "② 区域 Zone"
+G3 = "③ 触发 Strat"
+G4 = "④ 出场与风险"
+G5 = "时段（只做每个时段的第一个小时）"
+G6 = "提醒与显示"
+
+tfDaily   = input.timeframe("D", "第一根：日线", group=G1)
+tf4h      = input.timeframe("240", "第二根：4小时", group=G1)
+tf1h      = input.timeframe("60", "日内价位周期", group=G1)
+tfStory   = input.timeframe("W", "阶梯周期", group=G1)
+mixedRule = input.string("讲故事", "两根颜色不一致时", options=["讲故事", "日线为准", "观望"], group=G1)
+stairLen  = input.int(2, "阶梯摆动点强度", minval=1, maxval=5, group=G1)
+
+useBlock    = input.bool(true, "顶着日线天花板不做多 / 贴着日线地板不做空（明天再来）", group=G2)
+atPadD      = input.float(0.25, "贴近日线价位的距离（日线ATR倍数）", minval=0.0, step=0.05, group=G2)
+useClean    = input.bool(true, "突破K线必须在干净区里", group=G2)
+cleanMinBar = input.int(3, "干净区最少同向K线", minval=2, group=G2)
+cleanMinAtr = input.float(1.5, "干净区最小幅度（ATR倍数）", minval=0.1, step=0.1, group=G2)
+cleanKeep   = input.int(8, "最多保留干净区", minval=1, maxval=20, group=G2)
+usePull     = input.bool(true, "盘前4小时已经走完，就等回调", group=G2)
+ranBodyPct  = input.float(60.0, "走完的标准：实体占振幅 %", minval=10, maxval=100, group=G2)
+ranAtrMult  = input.float(1.0, "走完的标准：振幅 ≥ 4小时ATR倍数", minval=0.1, step=0.1, group=G2)
+pullDepth   = input.float(38.2, "回调深度 %", minval=1, maxval=100, group=G2)
+
+rangeMax    = input.int(20, "区间最多K线", minval=4, maxval=60, group=G3)
+rangeMin    = input.int(3, "区间最少K线", minval=2, maxval=20, group=G3)
+oppMin      = input.int(2, "区间内最少反向K线", minval=0, maxval=20, group=G3)
+rangeMinAtr = input.float(0.5, "区间最小高度（ATR倍数）", minval=0.0, step=0.1, group=G3)
+rangeMaxAtr = input.float(4.0, "区间最大高度（ATR倍数）", minval=0.5, step=0.5, group=G3)
+boBodyPct   = input.float(50.0, "突破K线实体 ≥ 振幅 %", minval=10, maxval=100, group=G3)
+boMaxPct    = input.float(50.0, "突破K线振幅 ≤ 区间高度 %", minval=10, maxval=200, group=G3)
+wickAtr     = input.float(0.10, "回踩影线 ≥ ATR倍数", minval=0.0, step=0.01, group=G3)
+wickPct     = input.float(20.0, "回踩影线 ≥ 该K线振幅 %", minval=0, maxval=100, group=G3)
+expireBars  = input.int(6, "挂单有效K线数", minval=1, maxval=50, group=G3)
+bufTicks    = input.int(0, "止损缓冲（跳）", minval=0, group=G3)
+maxPerSess  = input.int(2, "每个时段最多交易", minval=1, maxval=10, group=G3)
+
+exitMode    = input.string("1R保本+分批", "出场方式", options=["1R保本+分批", "只做1:1"], group=G4)
+partialPct  = input.float(50.0, "1R 平仓比例 %", minval=0, maxval=100, group=G4)
+capR        = input.float(3.0, "目标最远（R）", minval=1.0, step=0.5, group=G4)
+useFast     = input.bool(true, "走太快就止盈", group=G4)
+fastR       = input.float(1.5, "走太快：浮盈 ≥ R", minval=0.5, step=0.1, group=G4)
+fastBars    = input.int(3, "走太快：连续同向K线", minval=2, maxval=10, group=G4)
+maxMinutes  = input.int(240, "持仓最长分钟", minval=15, group=G4)
+riskPct     = input.float(0.5, "每笔风险 %（写进数据包，给 Agent 算仓位）", minval=0.01, step=0.05, group=G4)
+
+asiaOn   = input.bool(true, "亚盘", inline="as", group=G5)
+asiaSess = input.session("0900-1000", "", inline="as", group=G5)
+asiaTz   = input.string("Asia/Tokyo", "", inline="as", group=G5)
+ldnOn    = input.bool(true, "伦敦", inline="ld", group=G5)
+ldnSess  = input.session("0800-0900", "", inline="ld", group=G5)
+ldnTz    = input.string("Europe/London", "", inline="ld", group=G5)
+nyseOn   = input.bool(true, "纽约开盘", inline="ny", group=G5)
+nyseSess = input.session("0930-1030", "", inline="ny", group=G5)
+nyseTz   = input.string("America/New_York", "", inline="ny", group=G5)
+
+sendMode  = input.string("只发事件", "JSON 数据包", options=["只发事件", "每根收盘", "关闭"], group=G6)
+packetTag = input.string("coil", "数据包标签", group=G6)
+showTable = input.bool(true, "状态表", group=G6)
+showLvls  = input.bool(true, "日线天花板/地板", group=G6)
+showZones = input.bool(true, "干净区", group=G6)
+showSkips = input.bool(true, "跳过原因标签", group=G6)
+
+// ═════════════ 基础 ═════════════
+SCHEMA = "coil-reclaim/v1"
+atr    = ta.atr(14)
+cdir   = close > open ? 1 : close < open ? -1 : 0
+crng   = high - low
+cbody  = math.abs(close - open)
+buf    = bufTicks * syminfo.mintick
+done   = barstate.isconfirmed
+
+// ═════════════ 高周期（只读上一根已收盘K线）═════════════
+[dO, dH, dL, dC, dAtr] = request.security(syminfo.tickerid, tfDaily, [open[1], high[1], low[1], close[1], ta.atr(14)[1]], lookahead=barmerge.lookahead_on)
+[hO, hH, hL, hC, hAtr] = request.security(syminfo.tickerid, tf4h, [open[1], high[1], low[1], close[1], ta.atr(14)[1]], lookahead=barmerge.lookahead_on)
+
+// 天花板：阳线后接阴线，取两根实体的最高点；地板：阴线后接阳线，取实体最低点。
+// 只有本周期K线收盘穿过才算破。每个周期各保留最近两条未破的。
+levelPair() =>
+    var float c1 = na
+    var float c2 = na
+    var float f1 = na
+    var float f2 = na
+    topNow = math.max(open, close)
+    botNow = math.min(open, close)
+    topPrv = math.max(open[1], close[1])
+    botPrv = math.min(open[1], close[1])
+    if close[1] > open[1] and close < open
+        c2 := c1
+        c1 := math.max(topNow, topPrv)
+    if close[1] < open[1] and close > open
+        f2 := f1
+        f1 := math.min(botNow, botPrv)
+    if not na(c1) and close > c1
+        c1 := na
+    if not na(c2) and close > c2
+        c2 := na
+    if not na(f1) and close < f1
+        f1 := na
+    if not na(f2) and close < f2
+        f2 := na
+    [c1, c2, f1, f2]
+
+levelPairPrev() =>
+    [a, b, c, d] = levelPair()
+    [a[1], b[1], c[1], d[1]]
+
+[dC1, dC2, dF1, dF2] = request.security(syminfo.tickerid, tfDaily, levelPairPrev(), lookahead=barmerge.lookahead_on)
+[hC1, hC2, hF1, hF2] = request.security(syminfo.tickerid, tf4h, levelPairPrev(), lookahead=barmerge.lookahead_on)
+[oC1, oC2, oF1, oF2] = request.security(syminfo.tickerid, tf1h, levelPairPrev(), lookahead=barmerge.lookahead_on)
+
+// 阶梯：最近两个摆动高点、两个摆动低点。1=向上 -1=向下 2=横盘 0=数据不够
+stairCode() =>
+    ph = ta.pivothigh(high, stairLen, stairLen)
+    pl = ta.pivotlow(low, stairLen, stairLen)
+    h0 = ta.valuewhen(not na(ph), ph, 0)
+    h1 = ta.valuewhen(not na(ph), ph, 1)
+    l0 = ta.valuewhen(not na(pl), pl, 0)
+    l1 = ta.valuewhen(not na(pl), pl, 1)
+    na(h1) or na(l1) ? 0 : h0 > h1 and l0 > l1 ? 1 : h0 < h1 and l0 < l1 ? -1 : 2
+
+stairCodePrev() =>
+    s = stairCode()
+    s[1]
+
+stairW = request.security(syminfo.tickerid, tfStory, stairCodePrev(), lookahead=barmerge.lookahead_on)
+stairD = request.security(syminfo.tickerid, tfDaily, stairCodePrev(), lookahead=barmerge.lookahead_on)
+stairNow = nz(stairW) != 0 ? nz(stairW) : nz(stairD)
+stairTfNow = nz(stairW) != 0 ? "weekly" : "daily"
+
+dDirNow = na(dC) ? 0 : dC > dO ? 1 : dC < dO ? -1 : 0
+hDirNow = na(hC) ? 0 : hC > hO ? 1 : hC < hO ? -1 : 0
+
+// ═════════════ 工具函数 ═════════════
+// 在 side 方向、不越过 minPx 的价位里挑最近的一个
+pickNear(float best, string bestSrc, float lvl, string src, int side, float minPx) =>
+    float b = best
+    string s = bestSrc
+    if not na(lvl) and (side == 1 ? lvl >= minPx : lvl <= minPx)
+        if na(b) or (side == 1 ? lvl < b : lvl > b)
+            b := lvl
+            s := src
+    [b, s]
+
+nearestLevel(int side, float fromPx) =>
+    float b = na
+    string s = ""
+    if side == 1
+        [b1, s1] = pickNear(b, s, dC1, "日线天花板", 1, fromPx)
+        [b2, s2] = pickNear(b1, s1, dC2, "日线天花板", 1, fromPx)
+        [b3, s3] = pickNear(b2, s2, hC1, "4小时天花板", 1, fromPx)
+        [b4, s4] = pickNear(b3, s3, hC2, "4小时天花板", 1, fromPx)
+        [b5, s5] = pickNear(b4, s4, oC1, "1小时天花板", 1, fromPx)
+        [b6, s6] = pickNear(b5, s5, oC2, "1小时天花板", 1, fromPx)
+        b := b6
+        s := s6
+    else
+        [b1, s1] = pickNear(b, s, dF1, "日线地板", -1, fromPx)
+        [b2, s2] = pickNear(b1, s1, dF2, "日线地板", -1, fromPx)
+        [b3, s3] = pickNear(b2, s2, hF1, "4小时地板", -1, fromPx)
+        [b4, s4] = pickNear(b3, s3, hF2, "4小时地板", -1, fromPx)
+        [b5, s5] = pickNear(b4, s4, oF1, "1小时地板", -1, fromPx)
+        [b6, s6] = pickNear(b5, s5, oF2, "1小时地板", -1, fromPx)
+        b := b6
+        s := s6
+    [b, s]
+
+// 找区间：往回看 k 根，实体高低点；区间太高就停；取满足条件的最大 k
+findRange(int dir) =>
+    int bestK = na
+    float bestTop = na
+    float bestBot = na
+    float top = na
+    float bot = na
+    int opp = 0
+    if dir != 0
+        for k = 1 to rangeMax
+            bt = math.max(open[k], close[k])
+            bb = math.min(open[k], close[k])
+            top := na(top) ? bt : math.max(top, bt)
+            bot := na(bot) ? bb : math.min(bot, bb)
+            if (dir == 1 and close[k] < open[k]) or (dir == -1 and close[k] > open[k])
+                opp += 1
+            if top - bot > rangeMaxAtr * atr
+                break
+            beyond = dir == 1 ? close > top : close < bot
+            if k >= rangeMin and opp >= oppMin and top - bot >= rangeMinAtr * atr and beyond
+                bestK := k
+                bestTop := top
+                bestBot := bot
+    [bestK, bestTop, bestBot]
+
+// 扫流动性：区间里有K线刺破更早K线的最低点（做空看最高点）又收回来
+sweptLiquidity(int k, int dir) =>
+    bool g = false
+    if not na(k) and k >= 2 and dir != 0
+        float ext = dir == 1 ? low[k] : high[k]
+        for i = k - 1 to 1
+            if dir == 1
+                if low[i] < ext and close[i] > ext
+                    g := true
+                ext := math.min(ext, low[i])
+            else
+                if high[i] > ext and close[i] < ext
+                    g := true
+                ext := math.max(ext, high[i])
+    g
+
+// 连续 n 根同向且一根比一根收得远
+straightRun(int dir, int n) =>
+    bool ok = true
+    for i = 0 to n - 1
+        up = close[i] > close[i + 1] and close[i] > open[i]
+        dn = close[i] < close[i + 1] and close[i] < open[i]
+        if not (dir == 1 ? up : dn)
+            ok := false
+    ok
+
+dirWord(int d) => d == 1 ? "UP" : d == -1 ? "DOWN" : "FLAT"
+dirCn(int d) => d == 1 ? "▲ 阳线" : d == -1 ? "▼ 阴线" : "— 平"
+biasWord(int b) => b == 1 ? "BUY" : b == -1 ? "SELL" : "NONE"
+stairWord(int s) => s == 1 ? "UP" : s == -1 ? "DOWN" : s == 2 ? "BOX" : "UNKNOWN"
+stairCn(int s) => s == 1 ? "▲ 台阶向上" : s == -1 ? "▼ 台阶向下" : s == 2 ? "◆ 横盘" : "— 数据不够"
+jNum(float x) => na(x) ? "null" : str.tostring(math.round_to_mintick(x))
+jNum2(float x) => na(x) ? "null" : str.tostring(math.round(x, 2))
+jStr(string s) => "\"" + s + "\""
+jBool(bool b) => b ? "true" : "false"
+
+// ═════════════ 日线位置 ═════════════
+float dCeilAbove = na
+float dFloorBelow = na
+[ca, caS] = pickNear(na, "", dC1, "D", 1, close)
+[ca2, ca2S] = pickNear(ca, caS, dC2, "D", 1, close)
+dCeilAbove := ca2
+[fb, fbS] = pickNear(na, "", dF1, "D", -1, close)
+[fb2, fb2S] = pickNear(fb, fbS, dF2, "D", -1, close)
+dFloorBelow := fb2
+pad = nz(dAtr) * atPadD
+atCeil  = (not na(dC1) and close >= dC1 - pad) or (not na(dC2) and close >= dC2 - pad)
+atFloor = (not na(dF1) and close <= dF1 + pad) or (not na(dF2) and close <= dF2 + pad)
+posPct  = not na(dCeilAbove) and not na(dFloorBelow) and dCeilAbove > dFloorBelow ? (close - dFloorBelow) / (dCeilAbove - dFloorBelow) * 100 : na
+[nextCeil, nextCeilSrc]   = nearestLevel(1, close)
+[nextFloor, nextFloorSrc] = nearestLevel(-1, close)
+
+// ═════════════ 时段 ═════════════
+inSess(string sess, string tz) => not na(time(timeframe.period, sess, tz))
+inAsia = asiaOn and inSess(asiaSess, asiaTz)
+inLdn  = ldnOn and inSess(ldnSess, ldnTz)
+inNyse = nyseOn and inSess(nyseSess, nyseTz)
+sessNow = inAsia ? "Asia" : inLdn ? "London" : inNyse ? "NYSE" : ""
+inWin = sessNow != ""
+winStart = inWin and (sessNow != sessNow[1])
+newDay = ta.change(time(tfDaily)) != 0
+
+// ═════════════ 状态 ═════════════
+var int    bias      = 0
+var string biasWhy   = "等下一个时段"
+var int    sDaily    = 0
+var int    sH4       = 0
+var int    sStair    = 0
+var string sStairTf  = "weekly"
+var string sessName  = ""
+var int    sessTrades = 0
+var string mode      = "BREAKOUT"
+var float  preO = na
+var float  preH = na
+var float  preL = na
+var float  preC = na
+var bool   blocked   = false
+var string lastSkip  = "—"
+
+var int    state     = 0          // 0 找机会 1 挂单中 2 持仓中
+var string status    = "FLAT"
+var int    side      = 0
+var float  rTop = na
+var float  rBot = na
+var int    rK   = na
+var bool   rGrab = false
+var bool   rClean = false
+var float  boHi = na
+var float  boLo = na
+var float  ordPx = na
+var float  ordSL = na
+var int    ordBar = na
+var bool   dip = false
+var float  entry = na
+var float  stopPx = na
+var float  riskU = na
+var float  tp1 = na
+var float  target = na
+var string targetSrc = ""
+var float  preLvl = na
+var bool   be = false
+var bool   hit1R = false
+var float  banked = 0.0
+var int    entryBar = na
+var int    entryTime = na
+var float  exitPx = na
+var float  resultR = na
+var string note = ""
+
+var line lnStop = na
+var line ln1R = na
+var line lnTgt = na
+var line lnOrd = na
+
+// 干净区
+var int   runDir = 0
+var int   runCnt = 0
+var int   oppRun = 0
+var float runStart = na
+var float runExt = na
+var int   runBar = na
+var zTop = array.new_float()
+var zBot = array.new_float()
+var zBox = array.new_box()
+
+inClean(float px) =>
+    bool r = false
+    n = array.size(zTop)
+    if n > 0
+        for i = 0 to n - 1
+            if px <= array.get(zTop, i) and px >= array.get(zBot, i)
+                r := true
+    r
+
+// 新价位落在干净区里（留 8% 边），这个区就失效
+killZonesAt(float lvl) =>
+    if not na(lvl) and array.size(zTop) > 0
+        for i = array.size(zTop) - 1 to 0
+            t = array.get(zTop, i)
+            b = array.get(zBot, i)
+            p = (t - b) * 0.08
+            if lvl > b + p and lvl < t - p
+                box.delete(array.get(zBox, i))
+                array.remove(zTop, i)
+                array.remove(zBot, i)
+                array.remove(zBox, i)
+    true
+
+// 每根都算，避免条件里调用带历史引用的函数
+[fK, fTop, fBot] = findRange(bias)
+grabNow   = sweptLiquidity(fK, bias)
+straightL = straightRun(1, fastBars)
+straightS = straightRun(-1, fastBars)
+cleanNow  = inClean(close)
+
+var events = array.new_string()
+array.clear(events)
+
+packet(string ev) =>
+    openR = state == 2 and not na(riskU) and riskU > 0 ? side * (close - entry) / riskU : na
+    "{" + jStr("schema") + ":" + jStr(SCHEMA) + "," + jStr("event") + ":" + jStr(ev) + "," + jStr("tag") + ":" + jStr(packetTag) + "," + jStr("symbol") + ":" + jStr(syminfo.tickerid) + "," + jStr("timeframe") + ":" + jStr(timeframe.period) + "," + jStr("ts") + ":" + jStr(str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")) + "," + jStr("price") + ":" + jNum(close) + "," + jStr("session") + ":" + jStr(sessName) + "," + jStr("session_live") + ":" + jBool(inWin) + "," + jStr("session_trades") + ":" + str.tostring(sessTrades) + "," + jStr("max_trades") + ":" + str.tostring(maxPerSess) + "," + jStr("bias") + ":" + jStr(biasWord(bias)) + "," + jStr("daily_candle") + ":" + jStr(dirWord(sDaily)) + "," + jStr("h4_candle") + ":" + jStr(dirWord(sH4)) + "," + jStr("staircase") + ":" + jStr(stairWord(sStair)) + "," + jStr("staircase_tf") + ":" + jStr(sStairTf) + "," + jStr("bias_reason") + ":" + jStr(biasWhy) + "," + jStr("mode") + ":" + jStr(mode) + "," + jStr("daily_ceiling") + ":" + jNum(dCeilAbove) + "," + jStr("daily_floor") + ":" + jNum(dFloorBelow) + "," + jStr("position_pct") + ":" + jNum2(posPct) + "," + jStr("at_daily_ceiling") + ":" + jBool(atCeil) + "," + jStr("at_daily_floor") + ":" + jBool(atFloor) + "," + jStr("blocked_today") + ":" + jBool(blocked) + "," + jStr("in_clean_zone") + ":" + jBool(cleanNow) + "," + jStr("next_ceiling") + ":" + jNum(nextCeil) + "," + jStr("next_floor") + ":" + jNum(nextFloor) + "," + jStr("side") + ":" + jStr(side == 1 ? "LONG" : side == -1 ? "SHORT" : "NONE") + "," + jStr("range_top") + ":" + jNum(rTop) + "," + jStr("range_bottom") + ":" + jNum(rBot) + "," + jStr("range_candles") + ":" + (na(rK) ? "null" : str.tostring(rK)) + "," + jStr("liquidity_grab") + ":" + jBool(rGrab) + "," + jStr("breakout_in_clean_zone") + ":" + jBool(rClean) + "," + jStr("breakout_high") + ":" + jNum(boHi) + "," + jStr("breakout_low") + ":" + jNum(boLo) + "," + jStr("rubber_band") + ":" + jBool(dip) + "," + jStr("order_price") + ":" + jNum(ordPx) + "," + jStr("order_expires_after") + ":" + str.tostring(expireBars) + "," + jStr("status") + ":" + jStr(status) + "," + jStr("entry") + ":" + jNum(entry) + "," + jStr("stop") + ":" + jNum(state == 1 ? ordSL : stopPx) + "," + jStr("take_profit_1r") + ":" + jNum(tp1) + "," + jStr("target") + ":" + jNum(target) + "," + jStr("target_source") + ":" + jStr(targetSrc) + "," + jStr("breakeven") + ":" + jBool(be) + "," + jStr("close_pct_at_1r") + ":" + jNum2(exitMode == "只做1:1" ? 0.0 : partialPct) + "," + jStr("open_r") + ":" + jNum2(openR) + "," + jStr("exit_price") + ":" + jNum(exitPx) + "," + jStr("result_r") + ":" + jNum2(resultR) + "," + jStr("risk_pct") + ":" + jNum2(riskPct) + "," + jStr("note") + ":" + jStr(note) + "}"
+
+skipTag(string why) =>
+    if showSkips
+        label.new(bar_index, side == -1 or bias == -1 ? high : low, "✕ " + why, style=bias == -1 ? label.style_label_down : label.style_label_up, color=color.new(color.gray, 30), textcolor=color.white, size=size.tiny)
+
+// ═════════════ 主逻辑（只在K线收盘时）═════════════
+if done
+    if newDay
+        blocked := false
+
+    // —— 干净区：同向K线连着走，一根反向算停顿，两根反向算走完 ——
+    if cdir != 0
+        if runDir == 0
+            runDir := cdir
+            runCnt := 1
+            runStart := open
+            runExt := close
+            oppRun := 0
+            runBar := bar_index
+        else if cdir == runDir
+            runCnt += 1
+            runExt := runDir == 1 ? math.max(runExt, close) : math.min(runExt, close)
+            oppRun := 0
+        else
+            oppRun += 1
+            if oppRun >= 2
+                if runCnt >= cleanMinBar and math.abs(runExt - runStart) >= cleanMinAtr * atr
+                    zt = math.max(runStart, runExt)
+                    zb = math.min(runStart, runExt)
+                    array.push(zTop, zt)
+                    array.push(zBot, zb)
+                    array.push(zBox, showZones ? box.new(runBar, zt, bar_index - 2, zb, border_color=color.new(color.indigo, 40), bgcolor=color.new(color.indigo, 88), extend=extend.right, text="干净区", text_size=size.tiny, text_color=color.new(color.indigo, 20), text_halign=text.align_left, text_valign=text.align_top) : na)
+                    if array.size(zTop) > cleanKeep
+                        box.delete(array.shift(zBox))
+                        array.shift(zTop)
+                        array.shift(zBot)
+                runDir := cdir
+                runCnt := 2
+                runStart := open[1]
+                runExt := close
+                oppRun := 0
+                runBar := bar_index - 1
+    if hC1 != hC1[1]
+        killZonesAt(hC1)
+    if hF1 != hF1[1]
+        killZonesAt(hF1)
+    if oC1 != oC1[1]
+        killZonesAt(oC1)
+    if oF1 != oF1[1]
+        killZonesAt(oF1)
+
+    // —— ① 方向：每个时段第一根K线定下来，整段不变 ——
+    if winStart
+        sessName := sessNow
+        sessTrades := 0
+        sDaily := dDirNow
+        sH4 := hDirNow
+        sStair := stairNow
+        sStairTf := stairTfNow
+        preO := hO
+        preH := hH
+        preL := hL
+        preC := hC
+        int b = 0
+        string why = ""
+        if sDaily != 0 and sDaily == sH4
+            b := sDaily
+            why := "两根同色"
+        else if mixedRule == "观望"
+            b := 0
+            why := "颜色不一致 → 观望"
+        else if mixedRule == "日线为准"
+            b := sDaily
+            why := "颜色不一致 → 日线为准"
+        else if atCeil and not atFloor
+            b := -1
+            why := "颜色不一致 → 顶在日线天花板 → 只做空"
+        else if atFloor and not atCeil
+            b := 1
+            why := "颜色不一致 → 踩在日线地板 → 只做多"
+        else if sStair == 1
+            b := 1
+            why := "颜色不一致 → 周线台阶向上"
+        else if sStair == -1
+            b := -1
+            why := "颜色不一致 → 周线台阶向下"
+        else
+            b := sDaily != 0 ? sDaily : sH4
+            why := "颜色不一致 → 跟昨天日线"
+        bias := b
+        biasWhy := why
+        rngPre = preH - preL
+        ran = rngPre > 0 and math.abs(preC - preO) >= ranBodyPct / 100 * rngPre and rngPre >= ranAtrMult * nz(hAtr)
+        preDir = preC > preO ? 1 : preC < preO ? -1 : 0
+        mode := usePull and ran and preDir == bias and bias != 0 ? "PULLBACK" : "BREAKOUT"
+        array.push(events, packet("SESSION_BIAS"))
+        label.new(bar_index, bias == -1 ? high : low, sessName + " · " + (bias == 1 ? "▲ 只做多" : bias == -1 ? "▼ 只做空" : "■ 不做") + "\n日 " + dirWord(sDaily) + " · 4H " + dirWord(sH4) + " · " + (mode == "PULLBACK" ? "等回调" : "突破"), style=bias == -1 ? label.style_label_down : label.style_label_up, color=color.new(bias == 1 ? color.teal : bias == -1 ? color.purple : color.gray, 10), textcolor=color.white, size=size.small)
+
+    // —— ② 明天再来 ——
+    if inWin and useBlock and ((bias == 1 and atCeil) or (bias == -1 and atFloor))
+        blocked := true
+
+    // —— ③ 挂单中：先回踩再成交 ——
+    bool justFilled = false
+    if state == 1 and bar_index > ordBar
+        wick = side == 1 ? math.min(open, close) - low : high - math.max(open, close)
+        wickOk = wick >= wickAtr * atr and crng > 0 and wick >= wickPct / 100 * crng
+        hit = side == 1 ? high >= ordPx : low <= ordPx
+        if hit
+            if dip or (wickOk and (side == 1 ? open < ordPx : open > ordPx))
+                if not dip
+                    dip := true
+                    label.new(bar_index, side == 1 ? low : high, "② 橡皮筋 ↺", style=side == 1 ? label.style_label_up : label.style_label_down, color=color.new(color.orange, 20), textcolor=color.white, size=size.tiny)
+                entry := side == 1 ? math.max(open, ordPx) : math.min(open, ordPx)
+                stopPx := ordSL
+                riskU := math.abs(entry - stopPx)
+                tp1 := entry + side * riskU
+                [tg, tgS] = nearestLevel(side, tp1)
+                capPx = entry + side * capR * riskU
+                if exitMode == "只做1:1"
+                    target := tp1
+                    targetSrc := "1:1"
+                else if na(tg) or (side == 1 ? tg > capPx : tg < capPx)
+                    target := capPx
+                    targetSrc := str.tostring(capR) + "R封顶 · 前面没价位"
+                else
+                    target := tg
+                    targetSrc := tgS
+                [pl, plS] = nearestLevel(side, entry + side * syminfo.mintick)
+                preLvl := not na(pl) and (side == 1 ? pl < tp1 : pl > tp1) ? pl : na
+                be := false
+                hit1R := false
+                banked := 0.0
+                exitPx := na
+                resultR := na
+                entryBar := bar_index
+                entryTime := time
+                state := 2
+                status := "OPEN"
+                note := "回踩后成交"
+                sessTrades += 1
+                justFilled := true
+                line.delete(lnOrd)
+                lnStop := line.new(bar_index, stopPx, bar_index + 1, stopPx, color=color.red, width=2)
+                ln1R := line.new(bar_index, tp1, bar_index + 1, tp1, color=color.yellow, style=line.style_dashed)
+                lnTgt := line.new(bar_index, target, bar_index + 1, target, color=color.lime, width=2)
+                label.new(bar_index, side == 1 ? low : high, "③ 进场 " + (side == 1 ? "▲" : "▼") + "\n目标 · " + targetSrc, style=side == 1 ? label.style_label_up : label.style_label_down, color=color.new(side == 1 ? color.green : color.red, 10), textcolor=color.white, size=size.small)
+                array.push(events, packet("ENTRY"))
+            else
+                state := 0
+                status := "CANCELLED"
+                note := "没先回踩就直接突破"
+                line.delete(lnOrd)
+                array.push(events, packet("STOP_ORDER_CANCELLED"))
+                skipTag(note)
+        else
+            if wickOk
+                dip := true
+                label.new(bar_index, side == 1 ? low : high, "② 橡皮筋 ↺", style=side == 1 ? label.style_label_up : label.style_label_down, color=color.new(color.orange, 20), textcolor=color.white, size=size.tiny)
+            else if side == 1 ? close < rTop : close > rBot
+                state := 0
+                status := "CANCELLED"
+                note := "收回区间里"
+                line.delete(lnOrd)
+                array.push(events, packet("STOP_ORDER_CANCELLED"))
+                skipTag(note)
+            else if bar_index - ordBar >= expireBars
+                state := 0
+                status := "CANCELLED"
+                note := "挂单过期"
+                line.delete(lnOrd)
+                array.push(events, packet("STOP_ORDER_CANCELLED"))
+                skipTag(note)
+            if state == 1
+                line.set_x2(lnOrd, bar_index + 1)
+
+    // —— ④ 持仓管理 ——
+    if state == 2
+        float ex = na
+        string why = ""
+        if justFilled
+            if side == 1 ? close <= stopPx : close >= stopPx
+                ex := stopPx
+                why := "同一根K线打到止损"
+        else
+            if side == 1 ? low <= stopPx : high >= stopPx
+                ex := side == 1 ? math.min(open, stopPx) : math.max(open, stopPx)
+                why := be ? "保本出场" : "止损"
+            else
+                if not hit1R and (side == 1 ? high >= tp1 : low <= tp1)
+                    hit1R := true
+                    if exitMode == "只做1:1"
+                        ex := tp1
+                        why := "1:1 止盈"
+                    else
+                        banked := partialPct / 100
+                        stopPx := entry
+                        be := true
+                        note := "到 1R：平 " + str.tostring(partialPct) + "%，止损挪到保本"
+                        array.push(events, packet("BREAKEVEN"))
+                        label.new(bar_index, side == 1 ? high : low, "🛡 保本", style=side == 1 ? label.style_label_down : label.style_label_up, color=color.new(color.blue, 20), textcolor=color.white, size=size.tiny)
+                if na(ex) and not be and not na(preLvl) and (side == 1 ? high >= preLvl : low <= preLvl)
+                    stopPx := entry
+                    be := true
+                    note := "1R 前碰到价位，止损挪到保本"
+                    array.push(events, packet("BREAKEVEN"))
+                if na(ex) and (side == 1 ? high >= target : low <= target)
+                    ex := target
+                    why := "到目标 · " + targetSrc
+                if na(ex) and useFast and riskU > 0
+                    oR = side * (close - entry) / riskU
+                    if oR >= fastR and (side == 1 ? straightL : straightS)
+                        note := "走太快 · 止盈"
+                        array.push(events, packet("TOO_FAST_TAKE_PROFIT"))
+                        ex := close
+                        why := "走太快 · 止盈"
+                if na(ex) and time - entryTime >= maxMinutes * 60000
+                    ex := close
+                    why := "到时间"
+        if state == 2
+            line.set_xy1(lnStop, entryBar, stopPx)
+            line.set_xy2(lnStop, bar_index + 1, stopPx)
+            line.set_x2(ln1R, bar_index + 1)
+            line.set_x2(lnTgt, bar_index + 1)
+        if not na(ex)
+            exitPx := ex
+            resultR := riskU > 0 ? banked + (1 - banked) * side * (ex - entry) / riskU : 0.0
+            state := 0
+            status := "CLOSED"
+            note := why
+            array.push(events, packet("EXIT"))
+            label.new(bar_index, side == 1 ? high : low, (resultR > 0.05 ? "✓ " : resultR < -0.05 ? "✕ " : "● ") + str.tostring(resultR, "#.##") + "R · " + why, style=side == 1 ? label.style_label_down : label.style_label_up, color=color.new(resultR > 0.05 ? color.green : resultR < -0.05 ? color.red : color.gray, 20), textcolor=color.white, size=size.tiny)
+
+    // —— ③ 找突破K线 ——
+    if state == 0 and not justFilled and inWin and bias != 0 and sessTrades < maxPerSess and not na(fK) and cdir == bias and crng > 0 and cbody >= boBodyPct / 100 * crng
+        h = fTop - fBot
+        pullOk = mode != "PULLBACK" or (bias == 1 ? fBot <= preH - pullDepth / 100 * (preH - preL) : fTop >= preL + pullDepth / 100 * (preH - preL))
+        cleanOk = not useClean or inClean(bias == 1 ? high : low)
+        string skip = ""
+        if blocked
+            skip := bias == 1 ? "顶着日线天花板 · 明天再来" : "贴着日线地板 · 明天再来"
+        else if crng > boMaxPct / 100 * h
+            skip := "突破K线超过区间一半"
+        else if not pullOk
+            skip := "盘前已经走完 · 等回调"
+        else if not cleanOk
+            skip := "不在干净区"
+        if skip != ""
+            lastSkip := skip
+            skipTag(skip)
+        else
+            side := bias
+            rTop := fTop
+            rBot := fBot
+            rK := fK
+            rGrab := grabNow
+            rClean := inClean(bias == 1 ? high : low)
+            boHi := high
+            boLo := low
+            ordPx := side == 1 ? high : low
+            ordSL := side == 1 ? low - buf : high + buf
+            ordBar := bar_index
+            dip := false
+            entry := na
+            stopPx := na
+            tp1 := na
+            target := na
+            targetSrc := ""
+            exitPx := na
+            resultR := na
+            be := false
+            state := 1
+            status := "ORDER_WORKING"
+            note := side == 1 ? "BUY STOP 挂在突破K线高点，等回踩" : "SELL STOP 挂在突破K线低点，等回踩"
+            box.new(bar_index - fK, fTop, bar_index - 1, fBot, border_color=color.new(color.aqua, 20), bgcolor=color.new(color.aqua, 90), text=rGrab ? "扫流动性 ✓" : "", text_size=size.tiny, text_color=color.aqua, text_valign=text.align_bottom)
+            label.new(bar_index, side == 1 ? high : low, "① 突破", style=side == 1 ? label.style_label_down : label.style_label_up, color=color.new(side == 1 ? color.aqua : color.fuchsia, 10), textcolor=color.black, size=size.tiny)
+            lnOrd := line.new(bar_index, ordPx, bar_index + 1, ordPx, color=side == 1 ? color.aqua : color.fuchsia, style=line.style_dashed, width=2)
+            array.push(events, packet("STOP_ORDER_PLACED"))
+
+    // —— 发数据包 ——
+    if sendMode != "关闭"
+        if array.size(events) == 0 and sendMode == "每根收盘"
+            array.push(events, packet("BAR_CLOSE"))
+        if array.size(events) > 0
+            for i = 0 to array.size(events) - 1
+                alert(array.get(events, i), alert.freq_all)
+
+// ═════════════ 画图 ═════════════
+biasCol = bias == 1 ? color.teal : bias == -1 ? color.purple : color.gray
+bgcolor(inWin ? color.new(biasCol, 90) : na, title="时段首小时")
+plot(showLvls ? dCeilAbove : na, "日线天花板", color=color.new(color.yellow, 0), linewidth=2, style=plot.style_linebr)
+plot(showLvls ? dFloorBelow : na, "日线地板", color=color.new(color.orange, 0), linewidth=2, style=plot.style_linebr)
+plot(bias, "方向 1多 -1空 0不做", display=display.data_window)
+plot(state, "状态 0找 1挂单 2持仓", display=display.data_window)
+plot(side, "方向 1多 -1空", display=display.data_window)
+
+alertcondition(state == 1 and state[1] != 1, "挂单", "Coil Reclaim：突破挂单")
+alertcondition(state == 2 and state[1] != 2, "进场", "Coil Reclaim：回踩后进场")
+alertcondition(state[1] == 2 and state != 2, "出场", "Coil Reclaim：出场")
+
+// ═════════════ 状态表 ═════════════
+var table tb = table.new(position.top_right, 2, 26, bgcolor=color.new(#0b1220, 5), border_color=color.new(color.gray, 70), border_width=1, frame_color=color.new(color.aqua, 40), frame_width=1)
+
+row(int r, string k, string v, color vc) =>
+    table.cell(tb, 0, r, k, text_color=color.new(color.white, 25), text_size=size.small, text_halign=text.align_left)
+    table.cell(tb, 1, r, v, text_color=vc, text_size=size.small, text_halign=text.align_left)
+
+head(int r, string t) =>
+    table.cell(tb, 0, r, t, text_color=color.aqua, text_size=size.small, text_halign=text.align_left, bgcolor=color.new(color.aqua, 85))
+    table.cell(tb, 1, r, "", bgcolor=color.new(color.aqua, 85))
+
+agree(int d, int b) => b == 0 or d == 0 ? "" : d == b ? "  ✔" : "  ◐"
+
+if showTable and barstate.islast
+    W = color.white
+    head(0, "◆ COIL RECLAIM · 方向 · 区域 · 触发")
+    row(1, "品种", syminfo.ticker + " · " + timeframe.period, W)
+    row(2, "时段", inWin ? "● " + sessNow + " 首小时进行中" : "○ 等下一个时段", inWin ? color.lime : color.gray)
+    head(3, "① 方向 · 两根K线")
+    row(4, "昨天日线", dirCn(sDaily) + agree(sDaily, bias), sDaily == 1 ? color.lime : sDaily == -1 ? color.red : W)
+    row(5, "盘前4小时", dirCn(sH4) + agree(sH4, bias), sH4 == 1 ? color.lime : sH4 == -1 ? color.red : W)
+    row(6, sStairTf == "weekly" ? "周线台阶" : "日线台阶", stairCn(sStair), W)
+    row(7, "方向", bias == 1 ? "▲ 只做多" : bias == -1 ? "▼ 只做空" : "■ 今天不做", biasCol == color.gray ? W : biasCol)
+    row(8, "原因", biasWhy, W)
+    head(9, "② 区域 · 在哪里做")
+    row(10, "位置", na(posPct) ? "—" : str.tostring(posPct, "#") + "%（0=地板 100=天花板）", W)
+    row(11, "日线天花板", na(dCeilAbove) ? "—" : str.tostring(dCeilAbove, format.mintick) + "  " + str.tostring((dCeilAbove / close - 1) * 100, "#.##") + "%", color.yellow)
+    row(12, "日线地板", na(dFloorBelow) ? "—" : str.tostring(dFloorBelow, format.mintick) + "  " + str.tostring((dFloorBelow / close - 1) * 100, "#.##") + "%", color.orange)
+    row(13, "干净区", cleanNow ? "在里面 ✔" : "不在 ✕", cleanNow ? color.lime : color.gray)
+    row(14, "盘前4小时", mode == "PULLBACK" ? "已经走完" : "没走完", W)
+    row(15, "模式", mode == "PULLBACK" ? "等回调" : "等突破", W)
+    row(16, "今天", blocked ? "明天再来" : "可以做", blocked ? color.red : color.lime)
+    head(17, "③ 触发")
+    row(18, "区间", state >= 1 and not na(rK) ? str.tostring(rK) + " 根" + (rGrab ? " · 扫流动性 ✓" : "") : na(fK) ? "等区间" : str.tostring(fK) + " 根", W)
+    row(19, "橡皮筋回踩", state == 1 ? (dip ? "已回踩 ✔" : "等回踩") : "—", W)
+    row(20, "状态", state == 0 ? (inWin ? "找突破K线" : "首小时外，休息") : state == 1 ? (side == 1 ? "BUY STOP 挂单中" : "SELL STOP 挂单中") : (side == 1 ? "多单持仓中" : "空单持仓中"), state == 0 ? W : color.aqua)
+    row(21, "上次跳过", lastSkip, color.gray)
+    head(22, "④ 持仓")
+    row(23, "止损 / 1R", state == 2 ? str.tostring(stopPx, format.mintick) + " / " + str.tostring(tp1, format.mintick) + (be ? " · 已保本" : "") : "—", W)
+    row(24, "目标", state == 2 ? str.tostring(target, format.mintick) + " · " + targetSrc : "—", W)
+    row(25, "浮动", state == 2 and riskU > 0 ? str.tostring(side * (close - entry) / riskU, "#.##") + "R" : "—", W)

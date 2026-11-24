@@ -1,0 +1,32 @@
+//@version=5
+indicator("types/udt_fields")
+// Test UDT field access and modification
+
+type Point
+    float x
+    float y
+
+// Create instance
+p = Point.new(100, 50.5)
+
+// Access fields
+x1 = p.x
+y1 = p.y
+log.info(str.tostring(x1))
+log.info(str.tostring(y1))
+
+// Modify fields
+p.x := 200
+p.y := 75.5
+
+// Access modified fields
+x2 = p.x
+y2 = p.y
+log.info(str.tostring(x2))
+log.info(str.tostring(y2))
+
+// Expected output:
+// 100
+// 50.5
+// 200
+// 75.5

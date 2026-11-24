@@ -1,0 +1,38 @@
+// Pine Script plotshape: buy and sell signal markers
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/plotshape-buy-sell-signals
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Buy and sell markers", overlay = true)
+
+fastLen = input.int(9, "Fast EMA", minval = 1)
+slowLen = input.int(21, "Slow EMA", minval = 2)
+rsiLen  = input.int(14, "RSI length", minval = 2)
+
+fast = ta.ema(close, fastLen)
+slow = ta.ema(close, slowLen)
+rsi  = ta.rsi(close, rsiLen)
+
+crossUp   = ta.crossover(fast, slow)
+crossDown = ta.crossunder(fast, slow)
+
+// Signals the RSI filter keeps, only once the bar has closed
+buy  = crossUp and rsi < 70 and barstate.isconfirmed
+sell = crossDown and rsi > 30 and barstate.isconfirmed
+// Crosses the filter rejects
+skipBuy  = crossUp and rsi >= 70 and barstate.isconfirmed
+skipSell = crossDown and rsi <= 30 and barstate.isconfirmed
+
+plot(fast, "Fast EMA", color.teal)
+plot(slow, "Slow EMA", color.orange)
+
+// Labels with text: the text must be a fixed string
+plotshape(buy, "Buy", shape.labelup, location.belowbar, color.teal, text = "BUY", textcolor = color.white, size = size.small)
+plotshape(sell, "Sell", shape.labeldown, location.abovebar, color.red, text = "SELL", textcolor = color.white, size = size.small)
+
+// One character per bar, no text
+plotchar(skipBuy, "Rejected buy", "•", location.belowbar, color.gray, size = size.tiny)
+plotchar(skipSell, "Rejected sell", "•", location.abovebar, color.gray, size = size.tiny)
+
+alertcondition(buy, "Buy", "Buy signal on {{ticker}} at {{close}}")
+alertcondition(sell, "Sell", "Sell signal on {{ticker}} at {{close}}")

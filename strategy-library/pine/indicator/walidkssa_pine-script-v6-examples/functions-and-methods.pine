@@ -1,0 +1,48 @@
+// Pine Script functions and methods: a v6 example
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/functions-and-methods
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Functions and methods", overlay = true)
+
+len      = input.int(20, "Band length", minval = 2)
+mult     = input.float(2.0, "Band width (x stdev)", minval = 0.1, step = 0.1)
+swingLen = input.int(3, "Swing strength", minval = 1)
+
+// A function that returns three values (a tuple)
+bands(float src, simple int length, float k) =>
+    float basis = ta.sma(src, length)
+    float dev   = k * ta.stdev(src, length)
+    [basis, basis + dev, basis - dev]
+
+// One-line functions; decimals has a default value
+pctFrom(float price, float ref) => ref != 0 ? (price - ref) / ref * 100 : na
+roundTo(float x, int decimals = 2) => math.round(x, decimals)
+
+// A type, and two methods that work on it
+type Swing
+    float price
+    int   index
+
+method pctTo(Swing s, float price) =>
+    pctFrom(price, s.price)
+
+method age(Swing s) =>
+    na(s.index) ? na : bar_index - s.index
+
+[basis, upper, lower] = bands(close, len, mult)
+
+pl = ta.pivotlow(low, swingLen, swingLen)
+var Swing lastLow = Swing.new(na, na)
+if not na(pl)
+    // Fields of an object can be changed anywhere with :=
+    lastLow.price := pl
+    lastLow.index := bar_index - swingLen
+
+plot(basis, "Basis", color.gray)
+plot(upper, "Upper band", color.teal)
+plot(lower, "Lower band", color.teal)
+plot(lastLow.price, "Last swing low", color.orange, style = plot.style_stepline)
+plot(roundTo(pctFrom(close, basis)), "% from the basis", display = display.data_window)
+plot(roundTo(lastLow.pctTo(close), 1), "% above the last swing low", display = display.data_window)
+plot(lastLow.age(), "Bars since the swing low", display = display.data_window)

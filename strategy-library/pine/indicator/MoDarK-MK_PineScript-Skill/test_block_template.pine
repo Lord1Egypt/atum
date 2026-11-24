@@ -1,0 +1,67 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © test-block-pattern
+
+//@version=6
+// This file is a RUNNABLE REFERENCE for the assertion-counter test pattern used
+// throughout this skill's scaffolded templates. It is not meant to be scaffolded
+// as a real project — copy the pieces you need into your own script's testMode
+// section. Tallying pass/fail counts in a small table (instead of one label per
+// assertion per bar) avoids spending your label/plot-count budget on a long
+// backtest, and gives an at-a-glance summary instead of a wall of markers.
+indicator("Test Block Pattern Reference", overlay=false)
+
+// ————— Inputs
+bool testModeInput = input.bool(true, "Test Mode", group="Debug/Test")
+
+// ————— Calculations
+// Keep this in sync with the number of assertFailed() calls below.
+int TEST_COUNT = 2
+var int passCount = 0
+var int failCount = 0
+
+// @function Draws a failure marker and RETURNS 1 on failure, 0 on pass.
+//
+// The shape matters: Pine forbids a function from modifying a variable declared
+// at global scope (compile error CE10088), so an assertion helper CANNOT
+// increment the counters itself — it has to return a number the caller adds up.
+// A helper that also needs both if/else branches to yield the same type
+// (CE10235) is a second reason to end the function on one plain expression.
+assertFailed(bool condition, string description) =>
+    if not condition
+        label.new(
+             bar_index, high, "FAIL: " + description, color=#f23645,
+             textcolor=color.white, style=label.style_label_down, size=size.tiny
+             )
+    condition ? 0 : 1
+
+// Example assertions — replace with real checks about your own script's values.
+// Keep them cheap (no repainting side effects) since they run every bar.
+if testModeInput
+    int fails = 0
+    fails += assertFailed(not na(close), "close should never be na")
+    fails += assertFailed(bar_index >= 0, "bar_index should never be negative")
+    failCount += fails
+    passCount += TEST_COUNT - fails
+
+// ————— Visuals
+// Every cell sets text_color explicitly: Pine defaults cell text to BLACK, so a
+// cell without it is invisible on a dark chart — and a table with no bgcolor is
+// fully transparent, which makes that worse.
+color PASS_COLOR  = #089981
+color FAIL_COLOR  = #f23645
+color MUTED_COLOR = #b2b5be
+color PANEL_COLOR = #131722
+
+var table testDashboard = table.new(
+     position.bottom_left, 2, 2, border_width=1,
+     bgcolor=color.new(PANEL_COLOR, 15),
+     frame_color=color.new(MUTED_COLOR, 70), frame_width=1)
+if testModeInput and barstate.islast
+    testDashboard.cell(0, 0, "Passed", text_size=size.small, text_color=MUTED_COLOR,
+         text_halign=text.align_left)
+    testDashboard.cell(1, 0, str.tostring(passCount), text_color=PASS_COLOR,
+         text_size=size.small, text_halign=text.align_right)
+    testDashboard.cell(0, 1, "Failed", text_size=size.small, text_color=MUTED_COLOR,
+         text_halign=text.align_left)
+    testDashboard.cell(1, 1, str.tostring(failCount), text_size=size.small,
+         text_color=failCount > 0 ? FAIL_COLOR : PASS_COLOR, text_halign=text.align_right)

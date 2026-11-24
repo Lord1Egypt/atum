@@ -1,0 +1,44 @@
+// Pine Script daily open line and time functions (v6)
+// Explained (key lines, pitfalls, variations, FAQ): https://edgoro.com/pine-script-examples/daily-open-and-time-functions
+// MIT License, Copyright (c) 2026 Edgoro. For education: test on a demo account before any live use.
+
+//@version=6
+indicator("Daily open and previous day high/low", overlay = true)
+
+anchor    = input.string("Exchange session", "Day starts at", options = ["Exchange session", "Custom hour"])
+startHour = input.int(0, "Custom hour (0-23)", minval = 0, maxval = 23, active = anchor == "Custom hour")
+tz        = input.string("UTC", "Time zone of the custom hour", options = ["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"], active = anchor == "Custom hour")
+shadeDay  = input.string("None", "Shade a weekday", options = ["None", "Monday", "Friday"])
+
+// A new day, two ways: the exchange's daily session, or a fixed hour in a time zone
+bool exchangeNewDay = timeframe.change("D")
+int  shifted        = time - startHour * 3600000
+bool customNewDay   = dayofmonth(shifted, tz) != dayofmonth(shifted[1], tz)
+bool newDay         = anchor == "Exchange session" ? exchangeNewDay : customNewDay
+
+var float dayOpen  = na
+var float dayHigh  = na
+var float dayLow   = na
+var float prevHigh = na
+var float prevLow  = na
+
+if newDay
+    prevHigh := dayHigh
+    prevLow  := dayLow
+    dayOpen  := open
+    dayHigh  := high
+    dayLow   := low
+else
+    dayHigh := math.max(dayHigh, high)
+    dayLow  := math.min(dayLow, low)
+
+// na on the first bar of each day breaks the line between days
+plot(newDay ? na : dayOpen, "Daily open", color.orange, 2, plot.style_linebr)
+plot(newDay ? na : prevHigh, "Previous day high", color.teal, 1, plot.style_linebr)
+plot(newDay ? na : prevLow, "Previous day low", color.red, 1, plot.style_linebr)
+
+bool shade = (shadeDay == "Monday" and dayofweek == dayofweek.monday) or (shadeDay == "Friday" and dayofweek == dayofweek.friday)
+bgcolor(shade ? color.new(color.gray, 90) : na, title = "Weekday")
+
+aboveOpen = ta.crossover(close, dayOpen)
+alertcondition(aboveOpen, "Close above the daily open", "{{ticker}} closed above the daily open")
