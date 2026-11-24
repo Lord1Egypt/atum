@@ -1,0 +1,677 @@
+--- PAGE 1 / 12 ---
+                                                                              ATUM / ENGINEERING DESIGN SPECIFICATION
+RESEARCH PLATFORM / TECHNICAL BLUEPRINT / REV 0.1
+
+
+
+ATUM
+The complete AI market simulation laboratory
+Virtual markets. Artificial agents. Measurable intelligence.
+Architecture vision, repository gap assessment, capability catalogue, implementation roadmap and acceptance
+gates.
+
+Mission
+Give every AI research agent a complete virtual dealing room: its own synthetic account, a consistent market
+clock, evidence-backed analysis, an instrumented workstation, a reproducible simulator, and an independent
+evaluator. Every order, balance and result stays fictional. No real money, broker access, deposits, withdrawals or
+production order routes are in scope.
+
+Decision summary
+ Decision                                                      Reason
+
+ Keep Go + SQLite + React/TypeScript                           Preserve the existing project and local-first deployment.
+
+                                                               Eliminate divergence between paper execution and
+ One authoritative simulation kernel
+                                                               historical replay.
+
+                                                               Correct accounting, causal data and deterministic replay
+ Evidence before intelligence
+                                                               precede agent evaluation.
+
+                                                               No external execution credentials, live routing or real
+ Hard demo-only boundary
+                                                               financial commitments.
+
+                                                               A software quarantine and archive for failed research
+ Launch Control
+                                                               models, not physical rockets.
+
+
+Document map
+01 Repository audit • 02 Architecture • 03 Virtual accounts • 04 Simulation fidelity • 05 Market data • 06
+Analysis catalogue • 07 Agent workbench • 08 Experiment science • 09 Safety and operations • 10 Delivery
+gates • 11 Handoff and evidence
+Prepared 24 November 2026 | Engineering review of Lord1Egypt/atum, main tree
+37f463ed0518f14d110ac1f9635ab3ef58fb2860. Proposed features are not claims of completed implementation.
+
+
+
+
+                                                                              ATUM • Research sandbox only | 24 NOV 2026 |   1
+--- PAGE 2 / 12 ---
+                                                                             ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 01
+
+
+Repository audit & gaps
+Static inspection of selected source files and the repository tree. No build, execution, benchmark or independent
+financial validation was performed.
+
+ Priority / area                       Observed evidence                          Required outcome
+
+                                       simulation.go credits sale proceeds
+                                                                                  Reject invalid transitions; conserve
+ P0 • Accounting                       even when holdings are insufficient or
+                                                                                  virtual funds; test oversells.
+                                       missing.
+
+                                       Limit capability advertised, but
+                                                                                  Truthful capability flags; explicit
+ P0 • Order semantics                  PlaceOrder fills at current price
+                                                                                  pending state; correct cancellation.
+                                       without checking type or limit.
+
+                                       Bid equals ask; book is synthetic fixed-   Label synthetic data; implement causal
+ P0 • Market fidelity
+                                       depth; candles unavailable.                replay with known limitations.
+
+                                                                                  No execution before information is
+                                       backtest/engine.go evaluates candle
+ P0 • Replay causality                                                            available; document timing
+                                       window and fills at same close.
+                                                                                  assumptions.
+
+                                       backtest/portfolio.go uses short PnL
+                                                                                  Reconcile position PnL and ledger; test
+ P0 • Short ledger                     expression but cash credit follows long
+                                                                                  cost direction and equity.
+                                       logic.
+
+                                       SimAdapter keeps one balance map
+                                       and in-memory positions/orders;            Persistent independent fictional
+ P1 • Accounts
+                                       inspected migration list lacks explicit    accounts and run-scoped access.
+                                       account ledger tables.
+
+                                       indicators.go has SMA, EMA, RSI,
+                                                                                  Canonical library, reference fixtures,
+ P1 • Analytics                        MACD, Bollinger and Ichimoku;
+                                                                                  quality flags.
+                                       tools.go duplicates some calculations.
+
+                                       262 files, 77 Go/TS test files, 17
+                                                                                  Run tests and publish logs; presence of
+ P1 • Evidence                         internal modules; Actions returned
+                                                                                  tests does not imply passing.
+                                       zero runs at review.
+
+
+Preserve, do not rewrite
+Reuse the adapter abstractions, event bus, backtest entry point, risk service, agent registry, memory, web UI,
+SDKs and SQLite migrations. Introduce versioned interfaces and migration tests. Treat README claims as
+hypotheses until validated. Existing live routes are outside the demo-only product; remove them from the demo
+build or deny them at the boundary.
+
+
+
+
+                                                                            ATUM • Research sandbox only | 24 NOV 2026 |    2
+--- PAGE 3 / 12 ---
+                                                                          ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 02
+
+
+Target architecture
+Separate factual observations, simulated state, experimental agents and independent evaluation. A model is
+never the source of truth for account balances.
+
+    Layer                                                  Responsibility / boundary
+
+                                                           Read-only analysis, notebooks, watchlists, fictional account
+    Agent workbench
+                                                           workspace and experiment requests.
+
+                                                           Typed tools, scoped identities, schema validation, budgets,
+    Research gateway
+                                                           trace IDs and policy enforcement.
+
+                                                           Virtual clock, event queue, market model, simulated order
+    Simulation kernel
+                                                           lifecycle, accounting and checkpointing.
+
+                                                           Immutable licensed or synthetic datasets, provenance,
+    Market data plane
+                                                           point-in-time queries and replay.
+
+                                                           Run manifests, reference baselines, metrics, failure
+    Evaluation plane
+                                                           taxonomy, comparisons and artifacts.
+
+                                                           SQLite for metadata and ledgers; immutable compressed
+    Persistence
+                                                           files for large replay data; content hashes.
+
+                                                           Event stream, UI, alerts, logs, metrics and health; separate
+    Observability
+                                                           from the decision path.
+
+
+Execution boundary
+Agent request → policy gateway → simulation command queue → deterministic state transition → journal →
+read projections → evaluation. No direct agent mutation of database, clock, balance, dataset or evaluator. All
+commands carry run ID, virtual account ID, identity, schema version and idempotency key.
+
+Proposed module boundaries
+Extend internal/adapter/simulation into a single authoritative simulator; isolate domain types in internal/sim;
+create internal/dataset for provenance, internal/experiment for orchestration, internal/evaluation for metrics
+and internal/researchtools for the scoped tool surface. Keep legacy adapters outside the demo distribution.
+Preserve existing APIs with versioned compatibility views where safe.
+
+Engineering invariants
+      Same immutable data, configuration and scripted inputs produce equivalent ledger and event hashes.
+      Every output has a provenance record and explicit simulated status. Missing inputs cannot silently become
+       zero or random values.
+      A failed event cannot partially mutate balance, orders or positions. UI and AI read from committed
+       projections.
+
+
+
+
+                                                                          ATUM • Research sandbox only | 24 NOV 2026 |    3
+--- PAGE 4 / 12 ---
+                                                                               ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 03
+
+
+Virtual accounts & accounting
+The simulator is a fictional financial system; its correctness is an accounting problem before it is an AI problem.
+
+Account lifecycle
+      Create, list, inspect, pause, snapshot, reset by new run, clone a baseline and archive. Every account belongs
+       to one experiment and has a unique identity, virtual base currency and initial synthetic balance.
+      Store cash, reserved cash, holdings, liabilities, realized/unrealized P&L and equity as distinct fields. Label all
+       amounts SIMULATED; forbid real deposits, withdrawals and external transfers.
+      Use fixed-point decimal or integer units with instrument-specific rounding. Validate finite positive quantity
+       and price, currency precision, minimum increments and maximum synthetic bounds.
+
+Journal model
+    Record                                                     Minimum fields
+
+                                                               account_id, run_id, base_currency, status, created_at,
+    Account
+                                                               initial_cash
+
+                                                               instrument_id, asset class, quote currency, tick size,
+    Instrument
+                                                               quantity increment, contract metadata
+
+                                                               entry_id, transaction_id, account_id, asset, signed amount,
+    Ledger entry
+                                                               cause, sequence
+
+                                                               order_id, idempotency_key, simulated state, timestamps,
+    Order / fill
+                                                               quantity, price, fees
+
+                                                               account_id, event sequence, balance, positions, equity,
+    Snapshot
+                                                               digest
+
+                                                               dataset digest, scenario, seed, clock, config, code revision,
+    Run
+                                                               agent identifier
+
+
+Verification contracts
+      A fictional spot sale with no holdings fails without changing cash. Oversells and negative quantities fail
+       atomically.
+      Buy/sell round trips reconcile cash, holdings, fees and reported realized P&L; no hidden creation of virtual
+       funds.
+      Duplicate request, retry, restart and concurrent account access yield exactly one committed transition.
+      Derivatives and multi-currency accounting remain disabled until their fictional contract and valuation
+       invariants are tested.
+
+
+
+
+                                                                              ATUM • Research sandbox only | 24 NOV 2026 |     4
+--- PAGE 5 / 12 ---
+                                                                               ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 04
+
+
+Market simulation fidelity
+Support multiple levels of simulation accuracy; do not present approximate candle models as tick-accurate
+results.
+
+    Mode                                                       Scope and limitations
+
+                                                               Seeded artificial price paths and curated stress fixtures;
+    Synthetic scenarios                                        useful for invariants and education, never a real-market
+                                                               performance claim.
+
+                                                               Point-in-time OHLCV; decision only after a completed bar;
+    Historical bar replay                                      later eligible simulated fill; explicitly handle ambiguous
+                                                               intrabar order.
+
+                                                               Recorded bid/ask and event timestamps; model missing
+    Historical quote/tick replay
+                                                               quotes, gaps and data quality; no invented liquidity claims.
+
+                                                               Optional licensed public data capture; record then replay;
+    Read-only market observation
+                                                               no brokerage authentication or order submission.
+
+                                                               Only when appropriate licensed snapshots/deltas exist;
+    Order-book research
+                                                               otherwise display synthetic depth clearly.
+
+
+Virtual lifecycle and clock
+Model submitted, accepted, pending, partially filled, filled, cancelled, rejected and expired as explicit states.
+Distinguish observed time, availability time, event time and processing time. Keep stable ordering for equal
+timestamps. Use explicit simulation clock injection rather than wall-clock time in deterministic runs.
+
+Fidelity and adversarial fixtures
+      Validate fictional limit eligibility, price gaps, market closures, quote staleness, partial fills and cancellation
+       races. Treat uncertain intrabar paths conservatively or mark them ambiguous.
+      Model fees, spread, rounding and latency as scenario parameters with provenance, not unverified broker
+       guarantees. Document which parameters are measured, synthetic or unavailable.
+      Test missing and duplicate events, out-of-order timestamps, zero liquidity, split sessions, abrupt jumps,
+       disconnects, restart, extreme values and capacity exhaustion.
+      Do not enable asset classes that lack an adequate contract model. Validate equity, cost and state transitions
+       against independent hand-calculated fixtures.
+
+Common kernel rule
+Historical replay and interactive paper experiments must share the same state transition and accounting
+implementation. The backtest driver changes the clock and dataset, not financial semantics.
+
+
+
+
+                                                                              ATUM • Research sandbox only | 24 NOV 2026 |    5
+--- PAGE 6 / 12 ---
+                                                                               ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 05
+
+
+Market data & instrument universe
+Design a normalized research data plane across asset classes, not a claim that all markets are already supported.
+
+    Asset class                                                Research metadata / data constraints
+
+                                                               Currency conventions, bid/ask, session calendars, holidays,
+    FX                                                         quote precision; distinguish observed quotes from
+                                                               synthetic mid prices.
+
+                                                               Venue and currency, splits, dividends, delistings, trading
+    Equities / ETFs
+                                                               calendars; preserve point-in-time membership.
+
+                                                               Clarify whether observations represent spot, futures or a
+    Commodities / indices
+                                                               calculated index; document contract and expiry metadata.
+
+                                                               Contract multipliers, expiry, settlement and corporate
+    Futures / options                                          actions; initially observation-only, synthetic accounting only
+                                                               after validation.
+
+                                                               Venue-specific symbols and timestamps; distinguish spot
+    Crypto
+                                                               from derivatives; fictional execution only.
+
+                                                               Release timestamp, observation date, revisions, publication
+    Rates / macro
+                                                               source and usage rights.
+
+
+Data ingestion and governance
+        Provider registry: import CSV/Parquet, fixture generator and optional approved read-only feeds. Validate
+         schema, time zone, monotonically ordered keys, duplicate policy, gaps, units and source rights.
+        Store immutable raw snapshots and normalized partitions; manifest includes source, retrieval time, time
+         range, instrument metadata version, checksum, transformation version and quality flags.
+        Expose as-of queries with explicit availability timestamps to prevent future data leakage; cache by dataset
+         version, not mutable symbol alone.
+        Never fill unavailable market observations with random numbers disguised as live data. Separate missing,
+         delayed, stale, estimated and synthetic states.
+        Local-first default: small indexed SQLite metadata and columnar dataset files; compressed partitions,
+         retention limits, export and checksum verification.
+
+Market workstation
+Provide a watchlist, multi-timeframe charts, session clock, dataset coverage, price freshness, market calendar,
+historical event browser and an instrument inspector. All panels indicate the source and replay timestamp.
+
+
+
+
+                                                                              ATUM • Research sandbox only | 24 NOV 2026 |      6
+--- PAGE 7 / 12 ---
+                                                                          ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 06
+
+
+Analysis & indicator library
+Build a consistent educational measurement catalogue, not a collection of automatic real-money
+recommendations. Indicators are descriptive features with uncertainty and known failure modes.
+
+ Family                                                   Catalogue to support
+
+                                                          SMA, EMA, WMA, HMA, DEMA/TEMA, KAMA, regression
+ Trend / smoothing
+                                                          slope, ADX/DMI, Ichimoku, Supertrend.
+
+                                                          RSI, MACD with signal/histogram, stochastic, ROC, CCI,
+ Momentum
+                                                          Williams %R, momentum, MFI.
+
+                                                          ATR, realized volatility, rolling variance, Bollinger, Keltner,
+ Volatility / range
+                                                          Donchian, historical range and percentile.
+
+                                                          VWAP, OBV, volume profile, relative volume, spread and
+ Volume / liquidity
+                                                          depth summaries; label unavailable volume for FX.
+
+                                                          Support/resistance candidates, pivot points, swing/fractal
+ Structure                                                detection, gaps, candlestick descriptors, Fibonacci
+                                                          annotations.
+
+                                                          Z-score, rolling correlation, covariance, regression
+ Statistics                                               residuals, autocorrelation, distribution summaries and
+                                                          missingness.
+
+                                                          Currency and benchmark observations, calendar releases,
+ Cross-market / macro
+                                                          revisions, sector mapping and correlation diagnostics.
+
+                                                          Implied volatility, Greeks, open interest, term structure and
+ Derivatives observations
+                                                          funding when licensed data and conventions exist.
+
+
+Canonical computation contract
+Every indicator declares inputs, parameters, formula version, minimum lookback, warm-up behavior, timestamp
+convention, output units and validity. Return missing with reason rather than a numerical zero when data is
+insufficient. Use one implementation across API, chart and research runtime; remove duplicate helper drift.
+
+Validation and pattern analysis
+Compare against independent reference vectors, hand calculations and randomized property tests. Test constant
+prices, short series, nulls, extreme values and split adjustments. For subjective patterns (Elliott, ICT/SMC, chart
+formations), publish formal definitions, ambiguity and negative examples; no claims of predictive power without
+holdout evidence.
+
+
+
+
+                                                                         ATUM • Research sandbox only | 24 NOV 2026 |       7
+--- PAGE 8 / 12 ---
+                                                                          ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 07
+
+
+The complete agent workbench
+Think of this as a private virtual research hotel: each agent has a room, desk, charts, library, notebook and help
+desk. All actions remain inside fictional experiments.
+
+ Tool domain                                               Proposed research-only capabilities
+
+                                                           Inspect own simulated account, experiment status,
+ Identity / workspace
+                                                           permissions, quotas, clock and scenario.
+
+                                                           Search instruments, read point-in-time quotes/candles,
+ Market observation
+                                                           compare series, inspect data quality and calendar.
+
+                                                           Compute descriptive indicators, statistics, chart
+ Analysis
+                                                           annotations, correlation and stress summaries.
+
+                                                           Inspect simulated orders and fills; request bounded
+ Fictional execution
+                                                           synthetic transactions through the simulator only.
+
+                                                           Save hypotheses, datasets, notes, citations, observations,
+ Research notebook
+                                                           experiment parameters and negative findings.
+
+                                                           Subscribe to simulated state changes, data gaps, scenario
+ Alerts
+                                                           events, quota and experiment failures.
+
+                                                           Request bounded replay runs, inspect metrics, compare
+ Evaluation
+                                                           matched runs, retrieve result artifacts.
+
+                                                           Retrieve scoped evidence, exchange research notes, attach
+ Memory / collaboration
+                                                           reviewer annotations, archive superseded hypotheses.
+
+
+Tool protocol
+Use versioned JSON schemas and machine-readable errors; output includes source, as_of, run_id,
+simulated=true, quality flags and trace ID. Provide read tools first, enforce permissions server-side, and prohibit
+unrestricted shell, external execution APIs and secret retrieval. Agent output is untrusted data. Record concise
+decision summaries and tool traces, not private reasoning.
+
+Human interface
+Dashboard: experiment overview, account explorer, chart grid, data inspector, indicator overlays, alerts inbox,
+notebook, run comparison, event timeline, failure archive and export. Provide searchable commands, keyboard
+access, dark/light themes, accessible contrast and clear demo watermark. Use a deterministic scripted agent as
+the reference client before testing LLM integrations.
+
+
+
+
+                                                                          ATUM • Research sandbox only | 24 NOV 2026 |   8
+--- PAGE 9 / 12 ---
+                                                                           ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 08
+
+
+Experiment science & AI evaluation
+The goal is reliable comparisons and falsifiable hypotheses, not maximizing a leaderboard or promoting a
+winning model to real markets.
+
+Experiment design
+      Register hypothesis, immutable dataset, time window, seed, baseline, scenario, agent/model identifier,
+       model parameters, tool versions and budget before each run.
+      Separate chronological train, validation and untouched test windows; use point-in-time data; report
+       selection bias, multiple comparisons, survivorship bias and leakage checks.
+      Compare identical datasets and constraints using independent virtual accounts. Repeat with multiple seeds
+       or scripted replay; distinguish stochastic model variability from deterministic simulator behavior.
+      Include no-action, simple scripted and random baselines with declared seeds. Preserve failed runs and show
+       confidence intervals or uncertainty where appropriate.
+
+Metrics and evidence
+    Metric family                                          Required reporting
+
+                                                           Ledger reconciliation, state transition violations, replay
+    Simulator correctness
+                                                           digests, failed transactions, data completeness.
+
+                                                           Fictional equity curve, drawdown, turnover, cost
+    Historical experiment outcomes                         attribution, distribution of outcomes, trade count and
+                                                           exposure.
+
+                                                           Sample size, out-of-sample results, uncertainty intervals,
+    Statistical reliability
+                                                           baseline comparison, sensitivity and failure cases.
+
+                                                           Tool-call count, schema errors, abstention, unsupported
+    Agent behavior
+                                                           claims, latency, cost, policy violations and reproducibility.
+
+                                                           CPU/RAM, dataset throughput, queue depth, recovery
+    Operational quality
+                                                           time, resource and storage consumption.
+
+
+ATUM Launch Control
+Software-only lifecycle: candidate → sandboxed → evaluated → qualified for further simulation or quarantined
+→ archived. A failed agent receives an immutable failure dossier with trace IDs, seeds, regression cases and
+remediation notes. No automatic promotion to external markets. The only launch is a simulated research run.
+
+
+
+
+                                                                          ATUM • Research sandbox only | 24 NOV 2026 |     9
+--- PAGE 10 / 12 ---
+                                                                             ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 09
+
+
+Safety, security & operations
+Make demo-only a system invariant enforced independently of the UI, model and configuration.
+
+Isolation and controls
+      Remove or compile out live-execution code paths from the demo artifact. No broker keys, wallets, live API
+       trading, payment integrations or external account creation. Deny outbound connections except explicitly
+       approved read-only data/model endpoints; default offline fixture mode.
+      Bind to loopback by default; use authenticated per-run scoped tokens, least privilege, input validation, safe
+       path resolution, request limits and separate admin/agent roles. Redact secrets and sensitive data from logs.
+      No unreviewed third-party plugins or executable downloads. Isolate untrusted research plugins, constrain
+       CPU/RAM/time, and deny host filesystem/network access by default. Treat external content as untrusted.
+      Use transaction boundaries, append-only event journal, snapshots, migration backups, integrity checks and
+       crash recovery. Prefer SQLite single-writer ownership and bounded queues; measure before scaling out.
+
+Operations checklist
+    Area                                                     Expected evidence
+
+                                                             Pinned dependencies, reproducible builds where feasible,
+    Build
+                                                             SBOM, license inventory, artifact hashes.
+
+                                                             Unit, integration, race, property, fuzz, replay, migration,
+    Tests
+                                                             isolation and UI/API contract tests.
+
+                                                             Structured logs, health/readiness, error rates, queue lag,
+    Observability
+                                                             latency, storage use and clear failure alerts.
+
+                                                             Documented backup/restore and restart tests; committed
+    Recovery
+                                                             state reconciles with event journal.
+
+                                                             Local CPU-first fixtures; configurable model and dataset
+    Cost
+                                                             budgets; no mandatory paid providers.
+
+
+Supply chain
+The uploaded EA corpus and NOFX may be research references, not automatically reusable source. Track licenses
+per file; proprietary/no-license material is not copied. AGPL dependencies require explicit compatibility review.
+Keep third-party examples outside the shipped MIT code unless permitted.
+
+
+
+
+                                                                          ATUM • Research sandbox only | 24 NOV 2026 |     10
+--- PAGE 11 / 12 ---
+                                                                               ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 10
+
+
+Implementation roadmap & gates
+Sequence by correctness and evidence, not by the number of features. Each phase must preserve existing valid
+functionality.
+
+ Phase                                 Scope                                       Exit gate
+
+                                       Pin revision; build and inventory;
+                                                                                   Reproducible build/test logs, classified
+ 0 • Baseline                          inspect routing, tests, claims and
+                                                                                   findings, demo boundary plan.
+                                       licenses.
+
+                                                                                   Golden accounting fixtures; oversell,
+                                       Unify virtual ledger, account scope,
+ 1 • Core correctness                                                              duplicate, crash and isolation tests
+                                       order states and clock.
+                                                                                   pass.
+
+                                       Immutable data manifests, event
+                                                                                   No-future-data tests; deterministic
+ 2 • Data and replay                   ordering, causal replay and scenario
+                                                                                   hashes; documented fidelity.
+                                       fixtures.
+
+                                       Canonical indicators, notebook, alerts,     Reference indicator vectors,
+ 3 • Research tools
+                                       account views, SDK contracts.               permission tests, API/UI smoke.
+
+                                       Multi-agent isolated runs, baselines,       Matched run comparison;
+ 4 • Evaluation                        metrics, artifact exports and failure       reproducible scripted fixtures; no
+                                       archive.                                    hidden live actions.
+
+                                       Additional instrument profiles and
+                                                                                   Per-asset validation matrix;
+ 5 • Broaden coverage                  approved read-only observation
+                                                                                   unsupported features fail explicitly.
+                                       sources.
+
+                                                                                   All required gates pass;
+                                       Security, recovery, documentation,
+ 6 • Release                                                                       signed/hashable demo release and
+                                       resource benchmark and packaging.
+                                                                                   known limitations.
+
+
+Proposed initial acceptance workload (not measured)
+Start with 10 independent virtual accounts and a common immutable fixture; verify that account activity cannot
+alter another account or the shared market dataset. Run repeated replay and restart scenarios; measure
+p50/p95 latency, peak RSS, throughput and disk usage on the target machine. Expand concurrency only after
+recording a baseline. No arbitrary performance promise.
+
+Stop conditions
+Block release for any broken conservation invariant, look-ahead leak, cross-account state access, non-demo
+route, silent data fabrication, unsupported capability claim or unreconciled replay. Preserve logs and report
+failure rather than bypassing a gate.
+
+
+
+
+                                                                            ATUM • Research sandbox only | 24 NOV 2026 |   11
+--- PAGE 12 / 12 ---
+                                                                                      ATUM / ENGINEERING DESIGN SPECIFICATION
+DESIGN MODULE / 11
+
+
+Engineering handoff & evidence
+This document is a proposed roadmap, not an implementation report. Use it to derive issues and bounded pull
+requests.
+
+Instructions for the engineering agent
+Begin by reading the repository, verifying the pinned tree and mapping each requirement to existing code and
+tests. Keep architecture and working interfaces unless evidence justifies change. Work in small reviewable
+commits. Do not implement or enable real-money execution. Prioritize P0 correctness; avoid feature expansion
+until the simulator is reliable. For each phase, deliver a diff, test commands and output, fixture hashes, migration
+notes, known limitations and an explicit pass/fail verdict. Never replace unavailable data with fabricated
+observations or claim profitability from simulation.
+
+Source register • inspected snapshot
+README.md • https://github.com/Lord1Egypt/atum/blob/main/README.md
+config/default.yaml • https://github.com/Lord1Egypt/atum/blob/main/config/default.yaml
+internal/adapter/simulation/simulation.go • https://github.com/Lord1Egypt/atum/blob/main/internal/adapter/simulation/simulation.go
+internal/adapter/types.go • https://github.com/Lord1Egypt/atum/blob/main/internal/adapter/types.go
+internal/backtest/engine.go • https://github.com/Lord1Egypt/atum/blob/main/internal/backtest/engine.go
+internal/backtest/portfolio.go • https://github.com/Lord1Egypt/atum/blob/main/internal/backtest/portfolio.go
+internal/analysis/indicators.go • https://github.com/Lord1Egypt/atum/blob/main/internal/analysis/indicators.go
+internal/database/migrations.go • https://github.com/Lord1Egypt/atum/blob/main/internal/database/migrations.go
+internal/agent/tools.go • https://github.com/Lord1Egypt/atum/blob/main/internal/agent/tools.go
+internal/api/server.go • https://github.com/Lord1Egypt/atum/blob/main/internal/api/server.go
+internal/strategy/arena.go • https://github.com/Lord1Egypt/atum/blob/main/internal/strategy/arena.go
+
+Scope & limitations
+Repository tree inspected: 37f463ed0518f14d110ac1f9635ab3ef58fb2860. Selected source files were read, some
+only in excerpts. The audit is not exhaustive; runtime behavior and test outcomes remain unverified. No
+repository changes were made. All architecture extensions, data models, workload targets and roadmap phases
+are recommendations. Market data licensing and provider availability require separate verification. English was
+selected for direct engineering-agent reuse.
+
+
+
+
+                                                                                    ATUM • Research sandbox only | 24 NOV 2026 |   12
