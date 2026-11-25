@@ -1,0 +1,48 @@
+{
+ "max_open_trades": 3,
+ "stake_currency": "USDT",
+ "stake_amount": 1000,
+ "dry_run": true,
+ "timeframe": "1h",
+ "exchange": {
+  "name": "binance",
+  "key": "",
+  "secret": "",
+  "pair_whitelist": [
+   "BTC/USDT:USDT",
+   "ETH/USDT:USDT"
+  ]
+ },
+ "pairlists": [
+  {
+   "method": "StaticPairList"
+  }
+ ],
+ "telegram": {
+  "enabled": false,
+  "token": "",
+  "chat_id": ""
+ },
+ "user_data_dir": "/tmp/ft/user_data",
+ "bot_name": "atum",
+ "dry_run_wallet": 10000,
+ "tradable_balance_ratio": 1.0,
+ "stoploss": -0.1,
+ "minimal_roi": {
+  "0": 0.1
+ },
+ "use_exit_signal": true,
+ "trading_mode": "futures",
+ "margin_mode": "isolated",
+ "entry_pricing": {
+  "price_side": "other",
+  "use_order_book": true,
+  "order_book_top": 1,
+  "price_last_balance": 0.0
+ },
+ "exit_pricing": {
+  "price_side": "other",
+  "use_order_book": true,
+  "order_book_top": 1
+ }
+}
